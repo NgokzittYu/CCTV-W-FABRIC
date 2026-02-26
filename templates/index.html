@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureLens | Blockchain Surveillance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #F5F5F7;
+            color: #1D1D1F;
+            margin: 0;
+        }
+
+        /* ── Glass Nav ── */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        /* ── Video wrapper: 16:9 aspect ratio ── */
+        .video-aspect {
+            position: relative;
+            width: 100%;
+            padding-top: 56.25%;
+            /* 9/16 = 0.5625 */
+            background: #000;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        }
+
+        .video-aspect img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            /* no crop, allow letterbox */
+        }
+
+        /* ── Block card: strict square ── */
+        .block-card {
+            width: 120px;
+            height: 120px;
+            flex-shrink: 0;
+            border: 2px solid #D1D5DB;
+            border-radius: 14px;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .block-card:hover {
+            border-color: #3B82F6;
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.18);
+            transform: translateY(-3px);
+        }
+
+        /* ── Chain connector ── */
+        .chain-link {
+            width: 32px;
+            height: 3px;
+            flex-shrink: 0;
+            background: linear-gradient(90deg, #93C5FD, #D1D5DB);
+            border-radius: 4px;
+        }
+
+        .chain-node {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .chain-node:first-child .chain-link-before {
+            display: none;
+        }
+
+        /* ── Pop-in anim ── */
+        @keyframes popIn {
+            0% {
+                transform: scale(0.4) translateX(-20px);
+                opacity: 0;
+            }
+
+            70% {
+                transform: scale(1.06);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .block-anim {
+            animation: popIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+
+        /* ── Scrollbar hide ── */
+        .hide-sb::-webkit-scrollbar {
+            display: none;
+        }
+
+        .hide-sb {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* ── Apple card generic ── */
+        .card {
+            background: #fff;
+            border-radius: 18px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+    <!-- ═══════ NAV ═══════ -->
+    <nav class="glass-panel w-full h-14 flex items-center justify-between px-8 fixed top-0 z-50">
+        <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-red-500"></span>
+            <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+            <span class="w-3 h-3 rounded-full bg-green-500"></span>
+            <span class="ml-3 font-semibold text-lg tracking-tight">SecureLens</span>
+        </div>
+        <div class="flex items-center gap-4 text-sm font-medium text-gray-500">
+            <span class="text-green-600 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                System Online
+            </span>
+            <span>Test-Network</span>
+            <span>Org1</span>
+        </div>
+    </nav>
+
+    <!-- ═══════ CONTENT ═══════ -->
+    <main class="pt-[72px] px-4 md:px-6 pb-6 flex flex-col gap-5 flex-1">
+
+        <!-- ── VIDEO SECTION (priority) ── -->
+        <section class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <!-- Raw Feed -->
+            <div class="card p-4 relative">
+                <span
+                    class="absolute top-6 left-6 z-10 text-[11px] font-semibold text-white/90 bg-black/50 px-2.5 py-1 rounded-md backdrop-blur-sm uppercase tracking-wider">Raw
+                    Live Feed</span>
+                <div class="video-aspect">
+                    <img src="/video_feed/raw" alt="Raw Feed">
+                </div>
+            </div>
+
+            <!-- AI Feed -->
+            <div class="card p-4 relative">
+                <div class="absolute top-6 left-6 z-10 flex gap-2">
+                    <span
+                        class="text-[11px] font-semibold text-white/90 bg-black/50 px-2.5 py-1 rounded-md backdrop-blur-sm uppercase tracking-wider">AI
+                        Analysis</span>
+                    <span
+                        class="text-[11px] font-bold text-black/80 bg-yellow-400/90 px-2 py-1 rounded-md">YOLOv11x</span>
+                </div>
+                <div class="video-aspect">
+                    <img src="/video_feed/ann" alt="AI Feed">
+                </div>
+            </div>
+        </section>
+
+        <!-- ── BLOCKCHAIN SECTION ── -->
+        <section class="card p-5 md:p-6 flex flex-col" style="min-height:200px;">
+            <div class="flex justify-between items-center mb-3">
+                <div>
+                    <h2 class="text-lg font-semibold">Blockchain Ledger</h2>
+                    <p class="text-xs text-gray-400">Real-time Block Stream · 10 s interval</p>
+                </div>
+                <div class="flex items-center gap-1.5 text-xs text-gray-400">
+                    <span class="w-2 h-2 bg-blue-500 rounded-sm"></span>
+                    Fabric · mychannel
+                </div>
+            </div>
+
+            <!-- Horizontal chain -->
+            <div id="chain-container"
+                class="flex-1 flex items-center overflow-x-auto hide-sb px-2 py-3 gap-0 rounded-xl border border-gray-100 bg-gradient-to-r from-slate-50/80 to-white min-h-[150px]">
+                <p class="text-gray-300 text-sm italic mx-auto" id="empty-state">Waiting for first block…</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- ═══════ MODAL ═══════ -->
+    <div id="verifyModal"
+        class="fixed inset-0 z-50 hidden flex items-center justify-center bg-black/25 backdrop-blur-sm">
+        <div id="verifyCard"
+            class="bg-white rounded-2xl shadow-2xl p-6 md:p-8 w-[95vw] max-w-lg max-h-[90vh] overflow-y-auto transform transition-all scale-95 opacity-0">
+
+            <!-- Header -->
+            <div class="flex justify-between items-start mb-5">
+                <div>
+                    <h3 class="text-xl font-bold">Block Details</h3>
+                    <p class="text-gray-400 text-xs mt-1">Status: <span
+                            class="text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded">Anchored</span></p>
+                </div>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-black transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Meta -->
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="p-3 bg-gray-50 rounded-xl">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Block Height</p>
+                    <p id="modalBlockNum" class="font-mono text-sm font-semibold text-gray-800 mt-0.5">#?</p>
+                </div>
+                <div class="p-3 bg-gray-50 rounded-xl">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Evidence ID</p>
+                    <p id="modalEventId" class="font-mono text-xs text-gray-600 break-all mt-0.5">…</p>
+                </div>
+            </div>
+
+            <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                <p class="text-[10px] text-gray-400 uppercase tracking-wide">Transaction ID</p>
+                <p id="modalTxId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
+            </div>
+
+            <!-- Divider -->
+            <div class="relative my-4">
+                <div class="absolute inset-0 flex items-center">
+                    <div class="w-full border-t border-gray-200"></div>
+                </div>
+                <div class="relative flex justify-center"><span
+                        class="bg-white px-3 text-[10px] text-gray-400 uppercase tracking-wider">Integrity
+                        Verification</span></div>
+            </div>
+
+            <!-- Hashes -->
+            <div class="space-y-3 mb-2">
+                <div>
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide mb-1">Local File Hash</p>
+                    <p id="localHash" class="font-mono text-[11px] text-gray-800 break-all bg-gray-50 rounded-lg p-2.5">
+                        Computing…</p>
+                </div>
+                <div>
+                    <p class="text-[10px] text-blue-400 uppercase tracking-wide mb-1">On-Chain Immutable Hash</p>
+                    <p id="chainHash" class="font-mono text-[11px] text-blue-700 break-all bg-blue-50 rounded-lg p-2.5">
+                        Fetching…</p>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500">
+                    <span>Anchored At:</span>
+                    <span id="onchainTime" class="font-mono">…</span>
+                </div>
+            </div>
+
+            <!-- Result -->
+            <div id="verifyResult" class="mt-5 text-center hidden"></div>
+        </div>
+    </div>
+
+    <!-- ═══════ JS ═══════ -->
+    <script>
+        const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${wsProto}://${location.host}/ws`);
+        const chain = document.getElementById('chain-container');
+        const empty = document.getElementById('empty-state');
+
+        ws.onmessage = e => addBlock(JSON.parse(e.data));
+
+        /* ── Add block ── */
+        function addBlock(d) {
+            if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+
+            const node = document.createElement('div');
+            node.className = 'chain-node';
+
+            // Connector (will be hidden for the leftmost via CSS)
+            const linkBefore = document.createElement('div');
+            linkBefore.className = 'chain-link chain-link-before';
+
+            // Square block card
+            const card = document.createElement('div');
+            card.className = 'block-card block-anim';
+            card.onclick = () => openModal(d);
+
+            let accent = 'bg-blue-50 text-blue-600';
+            if (d.type === 'person') accent = 'bg-purple-50 text-purple-600';
+            if (d.type === 'car') accent = 'bg-indigo-50 text-indigo-600';
+            if (d.type === 'motorcycle') accent = 'bg-orange-50 text-orange-600';
+            if (d.type === 'truck') accent = 'bg-teal-50 text-teal-600';
+            if (d.type === 'bus') accent = 'bg-pink-50 text-pink-600';
+
+            card.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <span class="text-[10px] font-bold text-gray-400">#${d.block_number ?? '?'}</span>
+                    <div class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.5)]"></div>
+                </div>
+                <div class="text-center">
+                    <div class="inline-flex items-center justify-center w-8 h-8 rounded-full ${accent} mb-0.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                    </div>
+                    <div class="text-[11px] font-semibold text-gray-700 uppercase">${d.type}</div>
+                    ${d.count > 1 ? `<div class="text-[9px] text-gray-400">+${d.count - 1} objects</div>` : ''}
+                </div>
+                <div class="text-[8px] text-gray-400 font-mono text-right">${d.hash.substring(0, 8)}…</div>
+            `;
+
+            node.appendChild(linkBefore);
+            node.appendChild(card);
+
+            // Newest on left
+            chain.insertBefore(node, chain.firstChild);
+        }
+
+        /* ── Modal ── */
+        const modal = document.getElementById('verifyModal');
+        const mCard = document.getElementById('verifyCard');
+
+        function openModal(d) {
+            document.getElementById('modalEventId').innerText = d.id;
+            document.getElementById('modalTxId').innerText = d.tx_id || '…';
+            document.getElementById('modalBlockNum').innerText = d.block_number ? `#${d.block_number}` : '#?';
+            document.getElementById('localHash').innerText = 'Computing…';
+            document.getElementById('chainHash').innerText = 'Querying peer…';
+            document.getElementById('onchainTime').innerText = '…';
+            document.getElementById('verifyResult').classList.add('hidden');
+
+            modal.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                mCard.classList.remove('scale-95', 'opacity-0');
+                mCard.classList.add('scale-100', 'opacity-100');
+            });
+            verify(d.id);
+        }
+
+        async function verify(id) {
+            try {
+                const r = await (await fetch(`/api/verify/${id}`, { method: 'POST' })).json();
+                if (r.status === 'success') {
+                    document.getElementById('localHash').innerText = r.local_hash;
+                    document.getElementById('chainHash').innerText = r.chain_hash;
+                    if (r.tx_id) document.getElementById('modalTxId').innerText = r.tx_id;
+                    if (r.block_number) document.getElementById('modalBlockNum').innerText = `#${r.block_number}`;
+                    if (r.onchain_time) {
+                        document.getElementById('onchainTime').innerText = new Date(Number(r.onchain_time) * 1000).toLocaleString();
+                    }
+                    const res = document.getElementById('verifyResult');
+                    res.innerHTML = r.match
+                        ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 text-green-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Hash Match · Verified</div>`
+                        : `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 text-red-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Mismatch!</div>`;
+                    res.classList.remove('hidden');
+                } else {
+                    alert('Error: ' + r.message);
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        function closeModal() {
+            mCard.classList.remove('scale-100', 'opacity-100');
+            mCard.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => modal.classList.add('hidden'), 280);
+        }
+    </script>
+</body>
+
+</html>

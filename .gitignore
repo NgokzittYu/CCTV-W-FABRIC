@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# YOLO models (very large, do not upload)
+*.pt
+
+# Generated evidence data
+evidences/
+
+# Ignore env/venv if any
+venv/
+env/
+.env
+
+# Go module configs if they get too large
+# but usually go.sum and go.mod are fine
