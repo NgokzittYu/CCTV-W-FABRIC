@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
@@ -23,6 +24,14 @@ type Evidence struct {
 	ObjectCount  int    `json:"objectCount"`
 	EvidenceHash string `json:"evidenceHash"`
 	RawDataURL   string `json:"rawDataUrl"`
+}
+
+// KeyHistory represents one historical modification for a key.
+type KeyHistory struct {
+	TxID      string `json:"txId"`
+	Timestamp int64  `json:"timestamp"`
+	IsDelete  bool   `json:"isDelete"`
+	Value     string `json:"value"`
 }
 
 // InitLedger adds a base set of evidences to the ledger
@@ -72,6 +81,103 @@ func (s *EvidenceSmartContract) CreateEvidence(ctx contractapi.TransactionContex
 	}
 
 	return ctx.GetStub().PutState(id, evidenceJSON)
+}
+
+// CreateEvidenceBatch writes one Merkle root and links N event IDs in the same transaction.
+func (s *EvidenceSmartContract) CreateEvidenceBatch(
+	ctx contractapi.TransactionContextInterface,
+	batchID string,
+	cameraId string,
+	eventType string,
+	objectCount int,
+	evidenceHash string,
+	rawDataUrl string,
+	eventIDsJSON string,
+) error {
+	exists, err := s.EvidenceExists(ctx, batchID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("the batch %s already exists", batchID)
+	}
+
+	var eventIDs []string
+	if err := json.Unmarshal([]byte(eventIDsJSON), &eventIDs); err != nil {
+		return fmt.Errorf("invalid eventIDs JSON: %v", err)
+	}
+	if len(eventIDs) == 0 {
+		return fmt.Errorf("eventIDs cannot be empty")
+	}
+
+	seen := map[string]bool{}
+	normalizedEventIDs := make([]string, 0, len(eventIDs))
+	for _, raw := range eventIDs {
+		eventID := strings.TrimSpace(raw)
+		if eventID == "" {
+			return fmt.Errorf("eventID cannot be empty")
+		}
+		if seen[eventID] {
+			return fmt.Errorf("duplicate eventID in batch: %s", eventID)
+		}
+		seen[eventID] = true
+		normalizedEventIDs = append(normalizedEventIDs, eventID)
+	}
+
+	for _, eventID := range normalizedEventIDs {
+		eventExists, err := s.EvidenceExists(ctx, eventID)
+		if err != nil {
+			return err
+		}
+		if eventExists {
+			return fmt.Errorf("the evidence %s already exists", eventID)
+		}
+	}
+
+	now := time.Now().Unix()
+	if objectCount <= 0 {
+		objectCount = len(normalizedEventIDs)
+	}
+
+	batchEvidence := Evidence{
+		ID:           batchID,
+		Timestamp:    now,
+		CameraID:     cameraId,
+		EventType:    eventType,
+		ObjectCount:  objectCount,
+		EvidenceHash: evidenceHash,
+		RawDataURL:   rawDataUrl,
+		Location:     "default_location",
+	}
+	batchJSON, err := json.Marshal(batchEvidence)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState(batchID, batchJSON); err != nil {
+		return fmt.Errorf("failed to put batch %s: %v", batchID, err)
+	}
+
+	for idx, eventID := range normalizedEventIDs {
+		eventEvidence := Evidence{
+			ID:           eventID,
+			Timestamp:    now,
+			CameraID:     cameraId,
+			EventType:    "batch_member",
+			ObjectCount:  1,
+			EvidenceHash: evidenceHash,
+			RawDataURL:   fmt.Sprintf("batch://%s#%d", batchID, idx),
+			Location:     "default_location",
+		}
+		eventJSON, err := json.Marshal(eventEvidence)
+		if err != nil {
+			return err
+		}
+		if err := ctx.GetStub().PutState(eventID, eventJSON); err != nil {
+			return fmt.Errorf("failed to put event %s: %v", eventID, err)
+		}
+	}
+
+	return nil
 }
 
 // ReadEvidence returns the evidence stored in the world state with given id.
@@ -138,6 +244,42 @@ func (s *EvidenceSmartContract) VerifyEvidence(ctx contractapi.TransactionContex
 	}
 
 	return evidence.EvidenceHash == hashToVerify, nil
+}
+
+// GetHistoryForKey returns all historical versions of one key.
+func (s *EvidenceSmartContract) GetHistoryForKey(ctx contractapi.TransactionContextInterface, id string) ([]*KeyHistory, error) {
+	resultsIterator, err := ctx.GetStub().GetHistoryForKey(id)
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var history []*KeyHistory
+	for resultsIterator.HasNext() {
+		modification, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var ts int64
+		if modification.Timestamp != nil {
+			ts = modification.Timestamp.Seconds
+		}
+
+		value := ""
+		if !modification.IsDelete {
+			value = string(modification.Value)
+		}
+
+		history = append(history, &KeyHistory{
+			TxID:      modification.TxId,
+			Timestamp: ts,
+			IsDelete:  modification.IsDelete,
+			Value:     value,
+		})
+	}
+
+	return history, nil
 }
 
 func main() {

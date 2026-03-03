@@ -28,9 +28,12 @@ def compute_evidence_hash(json_path: Path, image_path: Path) -> str:
     # 1. Read JSON and remove local-only receipt metadata.
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
-    if isinstance(data, dict) and "_anchor" in data:
+    if isinstance(data, dict):
         data = dict(data)
         data.pop("_anchor", None)
+        data.pop("_merkle", None)
+        data.pop("evidence_hash", None)
+        data.pop("evidence_hash_list", None)
     normalized_json = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
     sha256.update(normalized_json)
 
@@ -145,8 +148,8 @@ def evidence_exists(env, channel, chaincode, evidence_id):
     return False
 
 
-def invoke_create_evidence(env, orderer_ca, org2_tls, channel, chaincode, args):
-    payload = json.dumps({"function": "CreateEvidence", "Args": args})
+def invoke_chaincode(env, orderer_ca, org2_tls, channel, chaincode, function_name, args):
+    payload = json.dumps({"function": function_name, "Args": args})
     cmd = [
         "peer",
         "chaincode",
@@ -167,7 +170,7 @@ def invoke_create_evidence(env, orderer_ca, org2_tls, channel, chaincode, args):
         "--tlsRootCertFiles",
         env["CORE_PEER_TLS_ROOTCERT_FILE"],
         "--peerAddresses",
-        "localhost:10051",
+        "localhost:9051",
         "--tlsRootCertFiles",
         str(org2_tls),
         "--waitForEvent",
@@ -186,6 +189,10 @@ def invoke_create_evidence(env, orderer_ca, org2_tls, channel, chaincode, args):
         tx_id = tx_match.group(1)
 
     return {"tx_id": tx_id, "stdout": proc.stdout, "stderr": proc.stderr}
+
+
+def invoke_create_evidence(env, orderer_ca, org2_tls, channel, chaincode, args):
+    return invoke_chaincode(env, orderer_ca, org2_tls, channel, chaincode, "CreateEvidence", args)
 
 
 def get_latest_block_number(env, channel):

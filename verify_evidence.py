@@ -20,13 +20,24 @@ def run(cmd, env=None, check=True):
 
 
 def compute_evidence_hash(json_path: Path, image_path: Path) -> str:
-    """Computes SHA256 hash of (normalized_json_bytes + image_bytes)."""
+    """Computes SHA256 hash of (normalized_json_bytes + image_bytes).
+    Must match the logic in anchor_to_fabric.py exactly.
+    """
     sha256 = hashlib.sha256()
 
-    with json_path.open("rb") as f:
-        json_bytes = f.read()
-    sha256.update(json_bytes)
+    # 1. Read JSON, remove local metadata, then normalize
+    with json_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        data = dict(data)
+        data.pop("_anchor", None)
+        data.pop("_merkle", None)
+        data.pop("evidence_hash", None)
+        data.pop("evidence_hash_list", None)
+    normalized_json = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+    sha256.update(normalized_json)
 
+    # 2. Read image bytes
     if image_path.exists():
         with image_path.open("rb") as f:
             image_bytes = f.read()

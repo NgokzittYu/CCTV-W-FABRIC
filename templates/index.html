@@ -188,7 +188,7 @@
             <div class="flex justify-between items-center mb-3">
                 <div>
                     <h2 class="text-lg font-semibold">Blockchain Ledger</h2>
-                    <p class="text-xs text-gray-400">Real-time Block Stream · 10 s interval</p>
+                    <p class="text-xs text-gray-400">Real-time Block Stream · 60 s Merkle Batch</p>
                 </div>
                 <div class="flex items-center gap-1.5 text-xs text-gray-400">
                     <span class="w-2 h-2 bg-blue-500 rounded-sm"></span>
@@ -241,6 +241,10 @@
                 <p class="text-[10px] text-gray-400 uppercase tracking-wide">Transaction ID</p>
                 <p id="modalTxId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
             </div>
+            <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                <p class="text-[10px] text-gray-400 uppercase tracking-wide">Merkle Batch</p>
+                <p id="modalBatchId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
+            </div>
 
             <!-- Divider -->
             <div class="relative my-4">
@@ -264,6 +268,11 @@
                     <p id="chainHash" class="font-mono text-[11px] text-blue-700 break-all bg-blue-50 rounded-lg p-2.5">
                         Fetching…</p>
                 </div>
+                <div>
+                    <p class="text-[10px] text-indigo-400 uppercase tracking-wide mb-1">Merkle Root From Proof</p>
+                    <p id="proofRoot" class="font-mono text-[11px] text-indigo-700 break-all bg-indigo-50 rounded-lg p-2.5">
+                        Waiting…</p>
+                </div>
                 <div class="flex justify-between text-xs text-gray-500">
                     <span>Anchored At:</span>
                     <span id="onchainTime" class="font-mono">…</span>
@@ -272,6 +281,19 @@
 
             <!-- Result -->
             <div id="verifyResult" class="mt-5 text-center hidden"></div>
+
+            <!-- History -->
+            <div class="mt-5">
+                <div class="flex items-center justify-between mb-2">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">On-Chain History</p>
+                    <button id="historyBtn"
+                        class="text-[11px] px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+                        onclick="loadHistory()">Load History</button>
+                </div>
+                <div id="historyList" class="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    <p class="text-xs text-gray-400">No history loaded.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -281,12 +303,27 @@
         const ws = new WebSocket(`${wsProto}://${location.host}/ws`);
         const chain = document.getElementById('chain-container');
         const empty = document.getElementById('empty-state');
+        let activeHistoryKey = null;
+        const cardStateByKey = new Map();
+
+        function cardKey(d) {
+            if (d.batch_id) return `batch:${d.batch_id}`;
+            return `event:${d.id}`;
+        }
 
         ws.onmessage = e => addBlock(JSON.parse(e.data));
 
         /* ── Add block ── */
         function addBlock(d) {
             if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+
+            const key = cardKey(d);
+            const existing = cardStateByKey.get(key);
+            if (existing) {
+                existing.payload = { ...existing.payload, ...d };
+                existing.card.onclick = () => openModal(existing.payload);
+                return;
+            }
 
             const node = document.createElement('div');
             node.className = 'chain-node';
@@ -318,8 +355,9 @@
                     </div>
                     <div class="text-[11px] font-semibold text-gray-700 uppercase">${d.type}</div>
                     ${d.count > 1 ? `<div class="text-[9px] text-gray-400">+${d.count - 1} objects</div>` : ''}
+                    ${d.batch_size > 1 ? `<div class="text-[9px] text-blue-500">Batch x${d.batch_size}</div>` : ''}
                 </div>
-                <div class="text-[8px] text-gray-400 font-mono text-right">${d.hash.substring(0, 8)}…</div>
+                <div class="text-[8px] text-gray-400 font-mono text-right">${(d.hash || '').substring(0, 8)}…</div>
             `;
 
             node.appendChild(linkBefore);
@@ -327,6 +365,8 @@
 
             // Newest on left
             chain.insertBefore(node, chain.firstChild);
+
+            cardStateByKey.set(key, { node, card, payload: d });
         }
 
         /* ── Modal ── */
@@ -337,10 +377,14 @@
             document.getElementById('modalEventId').innerText = d.id;
             document.getElementById('modalTxId').innerText = d.tx_id || '…';
             document.getElementById('modalBlockNum').innerText = d.block_number ? `#${d.block_number}` : '#?';
+            document.getElementById('modalBatchId').innerText = d.batch_id || 'N/A';
             document.getElementById('localHash').innerText = 'Computing…';
             document.getElementById('chainHash').innerText = 'Querying peer…';
+            document.getElementById('proofRoot').innerText = 'Waiting…';
             document.getElementById('onchainTime').innerText = '…';
             document.getElementById('verifyResult').classList.add('hidden');
+            document.getElementById('historyList').innerHTML = '<p class="text-xs text-gray-400">No history loaded.</p>';
+            activeHistoryKey = d.id;
 
             modal.classList.remove('hidden');
             requestAnimationFrame(() => {
@@ -355,21 +399,56 @@
                 const r = await (await fetch(`/api/verify/${id}`, { method: 'POST' })).json();
                 if (r.status === 'success') {
                     document.getElementById('localHash').innerText = r.local_hash;
-                    document.getElementById('chainHash').innerText = r.chain_hash;
+                    document.getElementById('chainHash').innerText = r.chain_hash || 'N/A';
+                    document.getElementById('proofRoot').innerText = r.proof_root || 'N/A';
+                    document.getElementById('modalBatchId').innerText = r.batch_id || 'N/A';
                     if (r.tx_id) document.getElementById('modalTxId').innerText = r.tx_id;
                     if (r.block_number) document.getElementById('modalBlockNum').innerText = `#${r.block_number}`;
                     if (r.onchain_time) {
                         document.getElementById('onchainTime').innerText = new Date(Number(r.onchain_time) * 1000).toLocaleString();
                     }
+                    activeHistoryKey = r.history_key || id;
+                    loadHistory();
                     const res = document.getElementById('verifyResult');
                     res.innerHTML = r.match
-                        ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 text-green-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Hash Match · Verified</div>`
+                        ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 text-green-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Proof Verified · Match</div>`
                         : `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 text-red-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Mismatch!</div>`;
                     res.classList.remove('hidden');
                 } else {
                     alert('Error: ' + r.message);
                 }
             } catch (e) { console.error(e); }
+        }
+
+        async function loadHistory() {
+            if (!activeHistoryKey) return;
+            const target = document.getElementById('historyList');
+            target.innerHTML = '<p class="text-xs text-gray-400">Loading...</p>';
+            try {
+                const r = await (await fetch(`/api/history/${activeHistoryKey}`)).json();
+                if (r.status !== 'success') {
+                    target.innerHTML = `<p class="text-xs text-red-500">${r.message || 'Failed to load history'}</p>`;
+                    return;
+                }
+                if (!r.history || !r.history.length) {
+                    target.innerHTML = '<p class="text-xs text-gray-400">No history entries.</p>';
+                    return;
+                }
+                target.innerHTML = r.history.map(item => {
+                    const when = item.timestamp ? new Date(Number(item.timestamp) * 1000).toLocaleString() : 'N/A';
+                    const rawValue = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);
+                    const displayValue = rawValue && rawValue.length > 160 ? `${rawValue.slice(0, 160)}...` : (rawValue || '');
+                    return `
+                        <div class="p-2.5 border border-gray-100 rounded-lg bg-gray-50">
+                            <div class="text-[10px] text-gray-400 mb-1">${when}</div>
+                            <div class="text-[10px] font-mono text-gray-500 break-all mb-1">${item.txId || ''}</div>
+                            <div class="text-[11px] text-gray-700">${item.isDelete ? 'DELETE' : displayValue}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                target.innerHTML = `<p class="text-xs text-red-500">${String(e)}</p>`;
+            }
         }
 
         function closeModal() {
