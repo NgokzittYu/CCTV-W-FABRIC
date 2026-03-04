@@ -17,27 +17,28 @@ from ultralytics import YOLO
 
 # Reuse Fabric helpers from anchor_to_fabric.py
 from anchor_to_fabric import build_fabric_env, invoke_chaincode
+from config import SETTINGS
 
 # Configuration
-FABRIC_SAMPLES_PATH = Path.home() / "projects" / "fabric-samples"
-EVIDENCE_DIR = Path("evidences").resolve()
-CAMERA_ID = "cctv-kctmc-apple-01"
-CHAINCODE_NAME = "evidence"
-CHANNEL_NAME = "mychannel"
+FABRIC_SAMPLES_PATH = SETTINGS.fabric_samples_path
+EVIDENCE_DIR = SETTINGS.evidence_dir
+CAMERA_ID = SETTINGS.camera_id
+CHAINCODE_NAME = SETTINGS.chaincode_name
+CHANNEL_NAME = SETTINGS.channel_name
 
 # Event aggregation config
-AGGREGATE_MIN_FRAMES = 3
-AGGREGATE_MAX_MISSED_FRAMES = 6
-AGGREGATE_IOU_THRESHOLD = 0.45
-AGGREGATE_WINDOW_SECONDS = 5.0
+AGGREGATE_MIN_FRAMES = SETTINGS.aggregate_min_frames
+AGGREGATE_MAX_MISSED_FRAMES = SETTINGS.aggregate_max_missed_frames
+AGGREGATE_IOU_THRESHOLD = SETTINGS.aggregate_iou_threshold
+AGGREGATE_WINDOW_SECONDS = SETTINGS.aggregate_window_seconds
 
 # Merkle batch config
-MERKLE_BATCH_WINDOW_SECONDS = 60
-MERKLE_FLUSH_POLL_SECONDS = 1.0
+MERKLE_BATCH_WINDOW_SECONDS = SETTINGS.merkle_batch_window_seconds
+MERKLE_FLUSH_POLL_SECONDS = SETTINGS.merkle_flush_poll_seconds
 
-CONFIDENCE_THRESHOLD = 0.45
+CONFIDENCE_THRESHOLD = SETTINGS.confidence_threshold
 # COCO class ids: person, bicycle, car, motorcycle, bus, truck
-ROAD_TARGET_CLASS_IDS = [0, 1, 2, 3, 5, 7]
+ROAD_TARGET_CLASS_IDS = SETTINGS.road_target_class_ids
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -48,7 +49,7 @@ latest_events = []
 lock = threading.Lock()
 
 # Load YOLO model
-MODEL_CANDIDATES = ["yolo11n.pt", "yolo11m.pt", "yolo11x.pt"]
+MODEL_CANDIDATES = SETTINGS.model_candidates
 selected_model = next((m for m in MODEL_CANDIDATES if Path(m).exists()), MODEL_CANDIDATES[0])
 
 if torch.backends.mps.is_available():
@@ -60,7 +61,7 @@ else:
 
 print(f"[INFO] Using YOLO model: {selected_model} on device: {DEVICE}")
 model = YOLO(selected_model)
-video_source = "https://cctv1.kctmc.nat.gov.tw/6e559e58/"
+video_source = SETTINGS.video_source
 
 # Ensure evidence dir exists
 EVIDENCE_DIR.mkdir(exist_ok=True)
@@ -217,9 +218,9 @@ def get_latest_block_number(env: Dict[str, str], channel: str) -> Optional[int]:
 
 
 def query_chaincode(function_name: str, args: List[str], timeout: int = 12) -> Dict[str, Any]:
-    peer_bin = str(Path.home() / "projects" / "fabric-samples" / "bin" / "peer")
+    peer_bin = str(FABRIC_SAMPLES_PATH / "bin" / "peer")
     env, _, _ = get_fabric_config()
-    env["FABRIC_CFG_PATH"] = str(Path.home() / "projects" / "fabric-samples" / "config")
+    env["FABRIC_CFG_PATH"] = str(FABRIC_SAMPLES_PATH / "config")
 
     cmd = [
         peer_bin,

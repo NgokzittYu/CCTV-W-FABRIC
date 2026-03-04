@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 import subprocess
 import hashlib
 import sys
 from pathlib import Path
+
+from anchor_to_fabric import build_fabric_env
+from config import SETTINGS
 
 
 def run(cmd, env=None, check=True):
@@ -46,25 +48,6 @@ def compute_evidence_hash(json_path: Path, image_path: Path) -> str:
     return sha256.hexdigest()
 
 
-def build_fabric_env(fabric_samples: Path):
-    env = os.environ.copy()
-    env["PATH"] = f"{fabric_samples / 'bin'}:{env.get('PATH', '')}"
-    env["FABRIC_CFG_PATH"] = str(fabric_samples / 'config')
-
-    env["CORE_PEER_TLS_ENABLED"] = "true"
-    env["CORE_PEER_LOCALMSPID"] = "Org1MSP"
-    env["CORE_PEER_ADDRESS"] = "localhost:7051"
-
-    org1 = fabric_samples / "test-network" / "organizations" / "peerOrganizations" / "org1.example.com"
-    env["CORE_PEER_TLS_ROOTCERT_FILE"] = str(
-        org1 / "peers" / "peer0.org1.example.com" / "tls" / "ca.crt"
-    )
-    env["CORE_PEER_MSPCONFIGPATH"] = str(
-        org1 / "users" / "Admin@org1.example.com" / "msp"
-    )
-    return env
-
-
 def get_onchain_evidence(env, channel, chaincode, evidence_id):
     cmd = [
         "peer",
@@ -87,10 +70,22 @@ def get_onchain_evidence(env, channel, chaincode, evidence_id):
 def main():
     parser = argparse.ArgumentParser(description="Verify local evidence against on-chain hash")
     parser.add_argument("evidence_id", help="The ID to verify (e.g., event_0055)")
-    parser.add_argument("--evidence-dir", default="evidences", help="Directory containing event_*.json")
-    parser.add_argument("--fabric-samples", default="../fabric-samples", help="Path to fabric-samples")
-    parser.add_argument("--channel", default="mychannel", help="Fabric channel name")
-    parser.add_argument("--chaincode", default="evidence", help="Chaincode name (default: evidence)")
+    parser.add_argument(
+        "--evidence-dir",
+        default=str(SETTINGS.evidence_dir),
+        help="Directory containing event_*.json",
+    )
+    parser.add_argument(
+        "--fabric-samples",
+        default=str(SETTINGS.fabric_samples_path),
+        help="Path to fabric-samples",
+    )
+    parser.add_argument("--channel", default=SETTINGS.channel_name, help="Fabric channel name")
+    parser.add_argument(
+        "--chaincode",
+        default=SETTINGS.chaincode_name,
+        help="Chaincode name (default: evidence)",
+    )
     args = parser.parse_args()
 
     fabric_samples = Path(args.fabric_samples).resolve()
@@ -110,7 +105,7 @@ def main():
     print(f"Local Hash:   {local_hash}")
 
     # 3. Fetch On-Chain Data
-    env = build_fabric_env(fabric_samples)
+    env, _, _ = build_fabric_env(fabric_samples)
     try:
         onchain_data = get_onchain_evidence(env, args.channel, args.chaincode, args.evidence_id)
     except Exception as e:

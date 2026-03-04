@@ -6,9 +6,11 @@ import time
 import cv2
 from ultralytics import YOLO
 
-DEFAULT_STREAM_PAGE = "https://cctv1.kctmc.nat.gov.tw/6e559e58/"
+from config import SETTINGS
+
+DEFAULT_STREAM_PAGE = SETTINGS.video_source
 # COCO class ids: person, bicycle, car, motorcycle, bus, truck
-ROAD_TARGET_CLASS_IDS = [0, 1, 2, 3, 5, 7]
+ROAD_TARGET_CLASS_IDS = SETTINGS.road_target_class_ids
 
 
 def resolve_stream_source(raw_source: str) -> str:
@@ -50,29 +52,43 @@ def open_capture(source: str) -> cv2.VideoCapture:
 def main():
     parser = argparse.ArgumentParser(description="YOLO detect from local file or live stream")
     parser.add_argument("--source", default=DEFAULT_STREAM_PAGE, help="Video path/URL/stream URL")
-    parser.add_argument("--model", default="yolo11n.pt", help="Model path")
-    parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
-    parser.add_argument("--save-every", type=int, default=10, help="Save JSON every N frames")
-    parser.add_argument("--output-dir", default="evidences", help="Output evidence directory")
-    parser.add_argument("--imgsz", type=int, default=1280, help="Inference image size")
+    parser.add_argument("--model", default=SETTINGS.detect_default_model, help="Model path")
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=SETTINGS.detect_confidence_threshold,
+        help="Confidence threshold",
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=SETTINGS.detect_save_every,
+        help="Save JSON every N frames",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=SETTINGS.detect_output_dir,
+        help="Output evidence directory",
+    )
+    parser.add_argument("--imgsz", type=int, default=SETTINGS.detect_imgsz, help="Inference image size")
     parser.add_argument("--save-frame", action="store_true", help="Save raw and annotated frame images")
     parser.add_argument("--max-frames", type=int, default=0, help="Stop after N frames (0 = unlimited)")
     parser.add_argument(
         "--reconnect-every",
         type=int,
-        default=20,
+        default=SETTINGS.detect_reconnect_every,
         help="Reconnect stream after N consecutive read failures",
     )
     parser.add_argument(
         "--retry-sleep",
         type=float,
-        default=0.2,
+        default=SETTINGS.detect_retry_sleep,
         help="Sleep seconds on transient frame read failure",
     )
     parser.add_argument(
         "--reconnect-sleep",
         type=float,
-        default=1.0,
+        default=SETTINGS.detect_reconnect_sleep,
         help="Sleep seconds before reconnect",
     )
     args = parser.parse_args()

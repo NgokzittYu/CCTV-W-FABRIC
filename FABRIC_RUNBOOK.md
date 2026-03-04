@@ -1,57 +1,73 @@
-# YOLO Event -> Fabric (MVP)
+# Fabric Runbook（evidence 链码 + Merkle 批量上链）
 
-This guide uses:
-- `projects/cv-simple/detect.py` to generate `evidences/event_*.json`
-- `projects/cv-simple/anchor_to_fabric.py` to submit those events to Fabric
-- `fabric-samples/test-network` + `asset-transfer-basic/chaincode-go`
+本手册对应当前仓库实际实现：
+- 链码：`chaincode/chaincode.go`（`evidence`）
+- Web 流程：`web_app.py` 自动执行 Merkle 批量上链（调用 `CreateEvidenceBatch`）
+- 脚本流程：`anchor_to_fabric.py` 单条证据上链（调用 `CreateEvidence`）
 
-## 1) Start Fabric network and deploy basic chaincode
+## 1. 启动 Fabric 网络并部署 evidence 链码
 
 ```bash
 cd ~/projects/fabric-samples/test-network
 ./network.sh down
 ./network.sh up createChannel -c mychannel -ca
-./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go
+./network.sh deployCC -ccn evidence -ccp /ABS/PATH/TO/CCTV-W-FABRIC-main/chaincode -ccl go
 ```
 
-## 2) Generate YOLO evidence JSON
+说明：
+- `-ccn` 必须是 `evidence`
+- `-ccp` 必须指向本仓库的 `chaincode` 目录
+
+## 2. 配置项目运行参数
+
+在项目根目录创建 `.env`（可从 `.env.example` 复制）：
 
 ```bash
-cd ~/projects/cv-simple
-python3 detect.py
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+cp .env.example .env
 ```
 
-If the live stream is unstable, run with reconnect-friendly options:
+最少需要确认以下参数：
 
-```bash
-cd ~/projects/cv-simple
-python3 detect.py --save-every 10 --reconnect-every 20 --reconnect-sleep 1 --retry-sleep 0.2
+```dotenv
+FABRIC_SAMPLES_PATH=~/projects/fabric-samples
+CHANNEL_NAME=mychannel
+CHAINCODE_NAME=evidence
+EVIDENCE_DIR=evidences
+VIDEO_SOURCE=https://cctv1.kctmc.nat.gov.tw/6e559e58/
 ```
 
-For night CCTV scenes (small, far objects), lower threshold and increase image size:
+## 3A. Web 模式（推荐）：自动 Merkle 批量上链
 
 ```bash
-cd ~/projects/cv-simple
-python3 detect.py --conf 0.15 --imgsz 1280 --save-every 5 --save-frame --max-frames 200
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn web_app:app --host 0.0.0.0 --port 8000
 ```
 
-## 3) Anchor evidence JSON to Fabric
+运行后：
+- 检测闭环会自动生成 `event_*.json/.jpg`
+- 在时间窗内聚合证据哈希，构建 Merkle Tree
+- 调用链码 `CreateEvidenceBatch` 上链 `merkle_root`
 
-Dry-run first (no chaincode invoke):
+## 3B. 脚本模式：单条证据上链
 
 ```bash
-cd ~/projects/cv-simple
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+source venv/bin/activate
 python3 anchor_to_fabric.py --dry-run --limit 5
-```
-
-Actual invoke:
-
-```bash
-cd ~/projects/cv-simple
 python3 anchor_to_fabric.py --limit 20
 ```
 
-## 4) Query one anchored record from Fabric
+说明：
+- 脚本模式调用 `CreateEvidence`
+- 适合对已有 `evidences/event_*.json` 批量补链
+
+## 4. 查询链上数据
+
+先设置 Fabric CLI 环境：
 
 ```bash
 cd ~/projects/fabric-samples
@@ -62,19 +78,42 @@ export CORE_PEER_LOCALMSPID=Org1MSP
 export CORE_PEER_ADDRESS=localhost:7051
 export CORE_PEER_TLS_ROOTCERT_FILE=$PWD/test-network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
 export CORE_PEER_MSPCONFIGPATH=$PWD/test-network/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
-
-peer chaincode query -C mychannel -n basic -c '{"function":"ReadAsset","Args":["event_0000"]}'
 ```
 
-## Data mapping used by `anchor_to_fabric.py`
+查询单个事件（`ReadEvidence`）：
 
-Fabric basic chaincode schema is fixed (`CreateAsset(id,color,size,owner,appraisedValue)`).
-So this MVP maps fields as:
+```bash
+peer chaincode query -C mychannel -n evidence -c '{"function":"ReadEvidence","Args":["event_xxx"]}'
+```
 
-- `id` = `event_id`
-- `color` = most frequent detection class (e.g. `person`, `car`)
-- `size` = number of objects detected in that frame event
-- `owner` = `camera_id` (default `cctv-kctmc-01`)
-- `appraisedValue` = `int(avg_confidence * 1000)`
+查询 batch（`ReadEvidence`）：
 
-For production, create a custom chaincode schema for CV events.
+```bash
+peer chaincode query -C mychannel -n evidence -c '{"function":"ReadEvidence","Args":["batch_xxx"]}'
+```
+
+查询历史（`GetHistoryForKey`）：
+
+```bash
+peer chaincode query -C mychannel -n evidence -c '{"function":"GetHistoryForKey","Args":["event_xxx"]}'
+```
+
+## 5. 验真
+
+命令行验真：
+
+```bash
+python3 verify_evidence.py event_xxx
+```
+
+Web API 验真：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/verify/event_xxx"
+```
+
+Web API 历史：
+
+```bash
+curl "http://127.0.0.1:8000/api/history/event_xxx"
+```

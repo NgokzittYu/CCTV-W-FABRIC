@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from collections import Counter
 
+from config import SETTINGS
+
 
 def run(cmd, env=None, check=True):
     proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
@@ -51,16 +53,22 @@ def build_fabric_env(fabric_samples: Path):
     env["PATH"] = f"{fabric_samples / 'bin'}:{env.get('PATH', '')}"
     env["FABRIC_CFG_PATH"] = str(fabric_samples / 'config')
 
-    env["CORE_PEER_TLS_ENABLED"] = "true"
-    env["CORE_PEER_LOCALMSPID"] = "Org1MSP"
-    env["CORE_PEER_ADDRESS"] = "localhost:7051"
+    env["CORE_PEER_TLS_ENABLED"] = SETTINGS.core_peer_tls_enabled
+    env["CORE_PEER_LOCALMSPID"] = SETTINGS.core_peer_local_mspid
+    env["CORE_PEER_ADDRESS"] = SETTINGS.core_peer_address
 
-    org1 = fabric_samples / "test-network" / "organizations" / "peerOrganizations" / "org1.example.com"
+    org1 = (
+        fabric_samples
+        / "test-network"
+        / "organizations"
+        / "peerOrganizations"
+        / SETTINGS.org1_domain
+    )
     env["CORE_PEER_TLS_ROOTCERT_FILE"] = str(
-        org1 / "peers" / "peer0.org1.example.com" / "tls" / "ca.crt"
+        org1 / "peers" / f"peer0.{SETTINGS.org1_domain}" / "tls" / "ca.crt"
     )
     env["CORE_PEER_MSPCONFIGPATH"] = str(
-        org1 / "users" / "Admin@org1.example.com" / "msp"
+        org1 / "users" / f"Admin@{SETTINGS.org1_domain}" / "msp"
     )
 
     orderer_ca = (
@@ -68,21 +76,21 @@ def build_fabric_env(fabric_samples: Path):
         / "test-network"
         / "organizations"
         / "ordererOrganizations"
-        / "example.com"
+        / SETTINGS.orderer_org_domain
         / "orderers"
-        / "orderer.example.com"
+        / SETTINGS.orderer_domain
         / "msp"
         / "tlscacerts"
-        / "tlsca.example.com-cert.pem"
+        / f"tlsca.{SETTINGS.orderer_org_domain}-cert.pem"
     )
     org2_tls = (
         fabric_samples
         / "test-network"
         / "organizations"
         / "peerOrganizations"
-        / "org2.example.com"
+        / SETTINGS.org2_domain
         / "peers"
-        / "peer0.org2.example.com"
+        / f"peer0.{SETTINGS.org2_domain}"
         / "tls"
         / "ca.crt"
     )
@@ -155,9 +163,9 @@ def invoke_chaincode(env, orderer_ca, org2_tls, channel, chaincode, function_nam
         "chaincode",
         "invoke",
         "-o",
-        "localhost:7050",
+        SETTINGS.orderer_address,
         "--ordererTLSHostnameOverride",
-        "orderer.example.com",
+        SETTINGS.orderer_tls_hostname_override,
         "--tls",
         "--cafile",
         str(orderer_ca),
@@ -166,11 +174,11 @@ def invoke_chaincode(env, orderer_ca, org2_tls, channel, chaincode, function_nam
         "-n",
         chaincode,
         "--peerAddresses",
-        "localhost:7051",
+        SETTINGS.org1_peer_address,
         "--tlsRootCertFiles",
         env["CORE_PEER_TLS_ROOTCERT_FILE"],
         "--peerAddresses",
-        "localhost:9051",
+        SETTINGS.org2_peer_address,
         "--tlsRootCertFiles",
         str(org2_tls),
         "--waitForEvent",
@@ -236,11 +244,23 @@ def write_anchor_receipt(json_path: Path, tx_id: str, block_number):
 
 def main():
     parser = argparse.ArgumentParser(description="Anchor YOLO evidence to Hyperledger Fabric with Hashing")
-    parser.add_argument("--evidence-dir", default="evidences", help="Directory containing event_*.json")
-    parser.add_argument("--fabric-samples", default="../fabric-samples", help="Path to fabric-samples")
-    parser.add_argument("--channel", default="mychannel", help="Fabric channel name")
-    parser.add_argument("--chaincode", default="evidence", help="Chaincode name (default: evidence)")
-    parser.add_argument("--camera-id", default="cctv-kctmc-01", help="Camera ID")
+    parser.add_argument(
+        "--evidence-dir",
+        default=str(SETTINGS.evidence_dir),
+        help="Directory containing event_*.json",
+    )
+    parser.add_argument(
+        "--fabric-samples",
+        default=str(SETTINGS.fabric_samples_path),
+        help="Path to fabric-samples",
+    )
+    parser.add_argument("--channel", default=SETTINGS.channel_name, help="Fabric channel name")
+    parser.add_argument(
+        "--chaincode",
+        default=SETTINGS.chaincode_name,
+        help="Chaincode name (default: evidence)",
+    )
+    parser.add_argument("--camera-id", default=SETTINGS.camera_id, help="Camera ID")
     parser.add_argument("--limit", type=int, default=0, help="Max files to process (0 = all)")
     parser.add_argument("--dry-run", action="store_true", help="Print mapped args without invoking")
     args = parser.parse_args()

@@ -1,99 +1,121 @@
-# SecureLens CCTV -> Fabric 闭环系统
+# SecureLens: CCTV -> Fabric Trusted Evidence Pipeline
 
-本项目实现了一个“视频检测 -> 证据哈希 -> 区块链锚定 -> 验真与追溯”的闭环，核心目标是让监控事件具备可验证、可追踪、可审计能力。
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-00a393.svg)](https://fastapi.tiangolo.com/)
+[![Hyperledger Fabric](https://img.shields.io/badge/Hyperledger%20Fabric-2.x-2F3134.svg)](https://www.hyperledger.org/use/fabric)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## 当前版本核心能力
+SecureLens 提供一个完整闭环：视频检测、证据哈希、Merkle 批量上链、链下验真、链上历史追溯。
 
-- 事件聚合（降噪）
-  - 连续 `N` 帧命中同一目标（`class + IoU`）后才确认事件
-  - 事件状态机：`pending -> confirmed -> closed`
-  - 目标丢失 `M` 帧后关闭事件
-- Merkle 批量上链（降本）
-  - 60 秒窗口内收集所有事件 `evidence_hash`
-  - 构建 Merkle Tree，只上链 `merkle_root`（1 笔交易覆盖 N 个事件）
-  - 本地保存每个事件的 Merkle proof（用于后续验真）
-- 链上历史追溯（可审计）
-  - 链码提供 `GetHistoryForKey(eventID)`，可查看 key 的所有历史版本
-- Web 可视化
-  - 实时画面（原始/检测）
-  - 区块卡片流（已按 batch 去重展示）
-  - 弹窗内直接查看验真结果与链上历史
+## 当前真实架构
 
-## 主要文件
+```mermaid
+flowchart LR
+    A[Video Source] --> B[web_app.py YOLO + Event Aggregator]
+    B --> C[evidences event_*.json + event_*.jpg]
+    C --> D[Evidence Hash]
+    D --> E[Merkle Batch Manager]
+    E --> F[CreateEvidenceBatch]
+    F --> G[(Hyperledger Fabric evidence chaincode)]
+    C --> H[verify_evidence.py /api/verify]
+    G --> H
+    G --> I[/api/history -> GetHistoryForKey/]
+```
 
-- Web 应用与实时流程：`web_app.py`
-- Fabric 调用工具：`anchor_to_fabric.py`
-- 本地验真脚本：`verify_evidence.py`
-- 链码：`chaincode/chaincode.go`
-- 前端模板：`templates/index.html`
-- 证据目录：`evidences/`
+## 功能清单
 
-## 快速开始
+- 目标检测与事件聚合：`pending -> confirmed -> closed`
+- 证据哈希标准化：排除 `_anchor`、`_merkle`、`evidence_hash`、`evidence_hash_list`
+- Merkle 批量上链：一个批次写入一个 `merkle_root`，同时写入事件键映射
+- 链下验真：支持 CLI 与 Web API 验真
+- 链上审计：支持 `GetHistoryForKey` 全量历史查询
 
-### 1. 部署/升级链码（必须）
+## 项目结构
+
+- `web_app.py`：Web 服务、实时检测、Merkle 批处理与上链
+- `anchor_to_fabric.py`：离线单条证据上链脚本（`CreateEvidence`）
+- `verify_evidence.py`：本地证据与链上哈希一致性校验
+- `chaincode/chaincode.go`：`evidence` 链码实现
+- `config.py`：统一配置加载（读取 `.env`）
+- `.env.example`：配置模板
+- `FABRIC_RUNBOOK.md`：Fabric 运维操作手册
+- `EXECUTE_INSTRUCTIONS.md`：执行步骤说明
+
+## 快速启动
+
+### 1) 部署链码
 
 ```bash
 cd ~/projects/fabric-samples/test-network
-./network.sh deployCC -ccn evidence -ccp /Users/ngokzit/Documents/GeminiAntigravity/CCTV-W-FABRIC-main/chaincode -ccl go
-```
-
-如果是全新环境，可先执行：
-
-```bash
 ./network.sh down
 ./network.sh up createChannel -c mychannel -ca
+./network.sh deployCC -ccn evidence -ccp /ABS/PATH/TO/CCTV-W-FABRIC-main/chaincode -ccl go
 ```
 
-### 2. 启动 Web 服务
+### 2) 配置项目
 
 ```bash
-cd /Users/ngokzit/Documents/GeminiAntigravity/CCTV-W-FABRIC-main
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+cp .env.example .env
+```
+
+至少校对以下项：
+
+```dotenv
+FABRIC_SAMPLES_PATH=~/projects/fabric-samples
+CHANNEL_NAME=mychannel
+CHAINCODE_NAME=evidence
+EVIDENCE_DIR=evidences
+VIDEO_SOURCE=https://cctv1.kctmc.nat.gov.tw/6e559e58/
+```
+
+### 3) 安装依赖并启动
+
+```bash
+python3 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 uvicorn web_app:app --host 0.0.0.0 --port 8000
 ```
 
-打开：`http://127.0.0.1:8000`
+访问：`http://127.0.0.1:8000`
 
-## 如何验证
-
-### 页面内验证（推荐）
-
-1. 点击任意事件卡片
-2. 在弹窗查看：
-   - `LOCAL FILE HASH`
-   - `MERKLE ROOT FROM PROOF`
-   - `ON-CHAIN IMMUTABLE HASH`
-3. 显示 `Proof Verified · Match` 即验真通过
-4. 在 `ON-CHAIN HISTORY` 查看历史版本
-
-### API 验证
+## 验真与追溯
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/api/verify/<event_id>"
-curl "http://127.0.0.1:8000/api/history/<event_id>"
+# 验真
+curl -X POST "http://127.0.0.1:8000/api/verify/event_xxx"
+
+# 查询历史
+curl "http://127.0.0.1:8000/api/history/event_xxx"
+
+# 命令行验真
+python3 verify_evidence.py event_xxx
 ```
+
+## 离线补链（可选）
+
+```bash
+python3 anchor_to_fabric.py --dry-run --limit 5
+python3 anchor_to_fabric.py --limit 20
+```
+
+## 更新日志
+
+- 2026-03-04：完成阶段一规范化，新增 `.env` 配置体系（含 `config.py`/`.env.example`），移除核心硬编码；新增 `requirements.txt` 与 `LICENSE`；同步 `FABRIC_RUNBOOK.md`、`EXECUTE_INSTRUCTIONS.md`，并补充阶段一自检脚本 `scripts/check_stage1.sh`。
 
 ## 文档
 
-- 执行指南：[`EXECUTE_INSTRUCTIONS.md`](EXECUTE_INSTRUCTIONS.md)
-- Fabric 操作手册：[`FABRIC_RUNBOOK.md`](FABRIC_RUNBOOK.md)
-- 更新日志：[`CHANGELOG.md`](CHANGELOG.md)
+- [FABRIC_RUNBOOK.md](FABRIC_RUNBOOK.md)
+- [EXECUTE_INSTRUCTIONS.md](EXECUTE_INSTRUCTIONS.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
-## FAQ（保留）
+## 自检
 
-### Windows/WSL 启动 Fabric 时端口冲突（如 7054）
-
-如果报错类似：
-
-```text
-Ports are not available: exposing port TCP 0.0.0.0:7054 ...
+```bash
+./scripts/check_stage1.sh
 ```
 
-可在 Windows 管理员终端执行：
+## License
 
-```powershell
-net stop winnat
-net start winnat
-```
-
-然后回到 WSL 重新拉起网络。
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -1,75 +1,70 @@
-# 执行指南：监控数据上链闭环
+# EXECUTE INSTRUCTIONS（与当前代码一致）
 
-我已为您更新了代码文件。为了使新的“闭环”方案生效，您需要在 Ubuntu 终端中执行以下操作。
+本文档以当前仓库实现为准：`evidence` 链码 + Web 端 Merkle 批量上链。
 
-## 1. 初始化 Go 链码模块
-
-新的链码位于 `projects/cv-simple/chaincode/chaincode.go`。我们需要初始化 Go 模块。
-
-```bash
-cd ~/projects/cv-simple/chaincode
-go mod init chaincode
-go mod tidy
-```
-
-## 2. 重新部署链码
-
-由于我们更改了数据结构（从 `Asset` 变为 `Evidence`），我们需要部署一个新的链码（或者升级旧的）。这里建议直接部署一个新的链码，名称为 `evidence`。
-
-假设您的 Fabric 测试网络在 `~/projects/fabric-samples/test-network`：
+## 1) 部署/重部署链码
 
 ```bash
 cd ~/projects/fabric-samples/test-network
-
-# 1. 停止当前网络（清理旧数据）- 可选，如果想保留旧数据请跳过，但可能需要解决冲突
 ./network.sh down
-
-# 2. 启动网络
 ./network.sh up createChannel -c mychannel -ca
-
-# 3. 部署我们新的 'evidence' 链码
-# 注意：路径指向我们刚才创建的 chaincode 文件夹
-./network.sh deployCC -ccn evidence -ccp ~/projects/cv-simple/chaincode -ccl go
+./network.sh deployCC -ccn evidence -ccp /ABS/PATH/TO/CCTV-W-FABRIC-main/chaincode -ccl go
 ```
 
-## 3. 运行上链脚本 (Anchor)
+注意：
+- 本仓库 `chaincode` 目录已包含 `go.mod`/`go.sum`，不需要再执行 `go mod init`。
 
-现在运行 Python 脚本，它会计算哈希并上链。
+## 2) 配置环境变量
 
 ```bash
-cd ~/projects/cv-simple
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+cp .env.example .env
+```
 
-# 首次运行建议 dry-run 看看哈希是否生成
+至少确认以下键值正确：
+
+```dotenv
+FABRIC_SAMPLES_PATH=~/projects/fabric-samples
+CHANNEL_NAME=mychannel
+CHAINCODE_NAME=evidence
+EVIDENCE_DIR=evidences
+VIDEO_SOURCE=https://cctv1.kctmc.nat.gov.tw/6e559e58/
+```
+
+## 3) 安装依赖并启动 Web 服务
+
+```bash
+cd /ABS/PATH/TO/CCTV-W-FABRIC-main
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn web_app:app --host 0.0.0.0 --port 8000
+```
+
+浏览器访问：`http://127.0.0.1:8000`
+
+## 4) 触发上链并验真
+
+系统会在事件关闭后自动写入本地证据并进入 Merkle 批次，随后调用 `CreateEvidenceBatch` 上链。
+
+你可以使用以下命令验证：
+
+```bash
+# 验真（Web API）
+curl -X POST "http://127.0.0.1:8000/api/verify/event_xxx"
+
+# 查询历史（Web API）
+curl "http://127.0.0.1:8000/api/history/event_xxx"
+
+# 本地脚本验真
+python3 verify_evidence.py event_xxx
+```
+
+## 5) 可选：离线脚本单条上链
+
+```bash
 python3 anchor_to_fabric.py --dry-run --limit 5
-
-# 实际上链 (limit 限制数量，防止一次太多)
 python3 anchor_to_fabric.py --limit 10
 ```
 
-## 4. 运行闭环验证 (Verify)
-
-挑选一个已上链的 ID（例如 `event_0000`），运行验证脚本。脚本会从区块链拉取哈希，并与您本地的 JSON+图片 重新计算的哈希进行对比。
-
-```bash
-# 验证成功案例
-python3 verify_evidence.py event_0000
-
-# 验证篡改案例（您可以手动修改 event_0000.json 里的一个字符，再运行此命令，应该会报错）
-```
-
-## 5. 常见问题 (FAQ)
-
-### 端口冲突无法启动链码网络
-
-如果在执行启动网络（`./network.sh up`）时遇到 `Error response from daemon: Ports are not available: listen tcp 0.0.0.0:7054: bind: An attempt was made to access a socket in a way forbidden by its access permissions.` 的报错：
-
-**原因：**
-Windows 的 Hyper-V 或 `winnat` 网络服务意外占用了某些随机端口。
-
-**解决方法：**
-在 Windows 宿主机中（而非 WSL 内），使用**管理员身份**打开 PowerShell 或 CMD，执行以下命令重启 NAT 服务解决：
-```powershell
-net stop winnat
-net start winnat
-```
-之后回到 WSL 即可正常通过该脚本拉起包含 7054 端口的 Docker 容器。
+该模式调用链码 `CreateEvidence`，不会进行 Merkle 批处理。
