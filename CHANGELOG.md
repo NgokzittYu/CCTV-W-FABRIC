@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04
+
+### Added
+
+- 阶段三链码能力：
+  - Org1/Org2/Org3 方法级 ACL（`requireMSP`）
+  - `CreateEvidenceBatch` 设备签名字段与验签校验
+  - `RectificationOrder` 工作流（创建/提交/确认）
+  - `ExportAuditTrail(batchID)` 审计导出
+  - PDC 接口：`PutRawEvidencePrivate` / `GetRawEvidencePrivate` / `GetRawEvidenceHash`
+- PDC 配置文件：`chaincode/collections_config.json`
+- 阶段三脚本：
+  - `scripts/stage3_setup_network.sh`
+  - `scripts/stage3_verify.sh`
+- 设备签名配置项：
+  - `ORG3_*` 网络配置
+  - `DEVICE_CERT_PATH` / `DEVICE_KEY_PATH` / `DEVICE_SIGN_ALGO` / `DEVICE_SIGNATURE_REQUIRED`
+- 离线补链脚本增强：
+  - `anchor_to_fabric.py` 新增 `--mode batch` 签名批量上链
+  - 新增 `--put-private` 与 `--private-use-transient` 私有数据写入能力
+
+### Changed
+
+- Web 批量上链流程改为强制附带设备签名参数（默认 `DEVICE_SIGNATURE_REQUIRED=true`）
+- 运行文档更新为阶段三命令（3 Org、`-ccep`、`-cccg`）
+- `PutRawEvidencePrivate` 支持可选 transient 负载（当 `imageBase64` 参数为空时）
+
 ## 2026-03-03
 
 ### Added

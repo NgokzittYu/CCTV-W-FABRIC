@@ -40,6 +40,18 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    token = value.strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _env_int_list(name: str, default: List[int]) -> List[int]:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
@@ -80,8 +92,10 @@ class Settings:
     orderer_tls_hostname_override: str
     org1_peer_address: str
     org2_peer_address: str
+    org3_peer_address: str
     org1_domain: str
     org2_domain: str
+    org3_domain: str
     orderer_org_domain: str
     orderer_domain: str
     video_source: str
@@ -107,6 +121,11 @@ class Settings:
     detect_retry_sleep: float
     detect_reconnect_sleep: float
 
+    device_cert_path: Path
+    device_key_path: Path
+    device_sign_algo: str
+    device_signature_required: bool
+
 
 def load_settings() -> Settings:
     default_fabric_samples = str(Path.home() / "projects" / "fabric-samples")
@@ -127,8 +146,10 @@ def load_settings() -> Settings:
         ),
         org1_peer_address=_env_str("ORG1_PEER_ADDRESS", "localhost:7051"),
         org2_peer_address=_env_str("ORG2_PEER_ADDRESS", "localhost:9051"),
+        org3_peer_address=_env_str("ORG3_PEER_ADDRESS", "localhost:11051"),
         org1_domain=_env_str("ORG1_DOMAIN", "org1.example.com"),
         org2_domain=_env_str("ORG2_DOMAIN", "org2.example.com"),
+        org3_domain=_env_str("ORG3_DOMAIN", "org3.example.com"),
         orderer_org_domain=_env_str("ORDERER_ORG_DOMAIN", "example.com"),
         orderer_domain=_env_str("ORDERER_DOMAIN", "orderer.example.com"),
         video_source=_env_str("VIDEO_SOURCE", "https://cctv1.kctmc.nat.gov.tw/6e559e58/"),
@@ -149,6 +170,10 @@ def load_settings() -> Settings:
         detect_reconnect_every=_env_int("DETECT_RECONNECT_EVERY", 20),
         detect_retry_sleep=_env_float("DETECT_RETRY_SLEEP", 0.2),
         detect_reconnect_sleep=_env_float("DETECT_RECONNECT_SLEEP", 1.0),
+        device_cert_path=Path(_env_str("DEVICE_CERT_PATH", "device_keys/default/cert.pem")).expanduser().resolve(),
+        device_key_path=Path(_env_str("DEVICE_KEY_PATH", "device_keys/default/key.pem")).expanduser().resolve(),
+        device_sign_algo=_env_str("DEVICE_SIGN_ALGO", "ECDSA_SHA256"),
+        device_signature_required=_env_bool("DEVICE_SIGNATURE_REQUIRED", True),
     )
 
 

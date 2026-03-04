@@ -16,3 +16,6 @@ env/
 
 # Go module configs if they get too large
 # but usually go.sum and go.mod are fine
+
+# Device keys / certs for stage3
+device_keys/

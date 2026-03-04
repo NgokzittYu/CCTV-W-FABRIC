@@ -1,20 +1,39 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/asn1"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
-// EvidenceSmartContract provides functions for managing an Evidence
+const (
+	org1MSP = "Org1MSP"
+	org2MSP = "Org2MSP"
+	org3MSP = "Org3MSP"
+
+	collectionRawEvidence = "collectionRawEvidence"
+	rawEvidenceHashPrefix = "rawhash:"
+	rectificationPrefix   = "rectify:"
+)
+
+// EvidenceSmartContract provides functions for managing evidence assets.
 type EvidenceSmartContract struct {
 	contractapi.Contract
 }
 
-// Evidence describes basic details of what makes up a simple evidence asset
+// Evidence describes one event evidence asset in world state.
 type Evidence struct {
 	ID           string `json:"id"`
 	Timestamp    int64  `json:"timestamp"`
@@ -26,6 +45,29 @@ type Evidence struct {
 	RawDataURL   string `json:"rawDataUrl"`
 }
 
+// MerkleBatch stores one anchored Merkle root and its event window metadata.
+type MerkleBatch struct {
+	ID                  string   `json:"id"`
+	MerkleRoot          string   `json:"merkleRoot"`
+	CameraID            string   `json:"cameraId"`
+	EventCount          int      `json:"eventCount"`
+	EventIDs            []string `json:"eventIds"`
+	WindowStart         int64    `json:"windowStart"`
+	WindowEnd           int64    `json:"windowEnd"`
+	Timestamp           int64    `json:"timestamp"`
+	PayloadHash         string   `json:"payloadHash"`
+	Signature           string   `json:"signature"`
+	DeviceCertSHA256    string   `json:"deviceCertSha256"`
+	SignerMSP           string   `json:"signerMsp"`
+	DeviceIdentityLabel string   `json:"deviceIdentityLabel"`
+}
+
+// MerkleProofStep describes one sibling hash in a Merkle proof.
+type MerkleProofStep struct {
+	Position string `json:"position"`
+	Hash     string `json:"hash"`
+}
+
 // KeyHistory represents one historical modification for a key.
 type KeyHistory struct {
 	TxID      string `json:"txId"`
@@ -34,7 +76,174 @@ type KeyHistory struct {
 	Value     string `json:"value"`
 }
 
-// InitLedger adds a base set of evidences to the ledger
+// RawEvidencePrivate is stored in private data collection.
+type RawEvidencePrivate struct {
+	EventID     string `json:"eventId"`
+	ImageBase64 string `json:"imageBase64"`
+	MimeType    string `json:"mimeType"`
+	ImageSHA256 string `json:"imageSha256"`
+	CameraID    string `json:"cameraId"`
+	Timestamp   int64  `json:"timestamp"`
+}
+
+// RawEvidenceHash is public metadata for private raw evidence.
+type RawEvidenceHash struct {
+	EventID     string `json:"eventId"`
+	ImageSHA256 string `json:"imageSha256"`
+	CameraID    string `json:"cameraId"`
+	Timestamp   int64  `json:"timestamp"`
+	Collection  string `json:"collection"`
+}
+
+// RectificationHistoryEntry describes one state transition in rectification workflow.
+type RectificationHistoryEntry struct {
+	At      int64  `json:"at"`
+	ByMSP   string `json:"byMsp"`
+	Action  string `json:"action"`
+	Comment string `json:"comment"`
+}
+
+// RectificationOrder models one remediation/rectification workflow order.
+type RectificationOrder struct {
+	ID          string                      `json:"id"`
+	BatchID     string                      `json:"batchId"`
+	CreatedBy   string                      `json:"createdBy"`
+	AssignedTo  string                      `json:"assignedTo"`
+	Status      string                      `json:"status"`
+	Deadline    int64                       `json:"deadline"`
+	Attachments []string                    `json:"attachments"`
+	CreatedAt   int64                       `json:"createdAt"`
+	UpdatedAt   int64                       `json:"updatedAt"`
+	History     []RectificationHistoryEntry `json:"history"`
+}
+
+// AuditTrail is returned for cross-organization auditing.
+type AuditTrail struct {
+	Batch          *MerkleBatch          `json:"batch"`
+	Events         []*Evidence           `json:"events"`
+	Rectifications []*RectificationOrder `json:"rectifications"`
+}
+
+type ecdsaSignature struct {
+	R *big.Int
+	S *big.Int
+}
+
+func rawEvidenceHashKey(eventID string) string {
+	return rawEvidenceHashPrefix + eventID
+}
+
+func rectificationKey(orderID string) string {
+	return rectificationPrefix + orderID
+}
+
+func (s *EvidenceSmartContract) getMSPID(ctx contractapi.TransactionContextInterface) (string, error) {
+	ci := ctx.GetClientIdentity()
+	if ci == nil {
+		return "", fmt.Errorf("client identity is unavailable")
+	}
+	mspID, err := ci.GetMSPID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get invoker MSP: %v", err)
+	}
+	return strings.TrimSpace(mspID), nil
+}
+
+func (s *EvidenceSmartContract) requireMSP(ctx contractapi.TransactionContextInterface, allowed ...string) (string, error) {
+	mspID, err := s.getMSPID(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range allowed {
+		if strings.EqualFold(mspID, strings.TrimSpace(a)) {
+			return mspID, nil
+		}
+	}
+	sorted := append([]string{}, allowed...)
+	sort.Strings(sorted)
+	return "", fmt.Errorf("permission denied for MSP %s, allowed: %s", mspID, strings.Join(sorted, ","))
+}
+
+func canonicalBatchPayloadHash(batchID string, cameraID string, merkleRoot string, windowStart int64, windowEnd int64, eventIDs []string, eventHashes []string) (string, error) {
+	payload := map[string]interface{}{
+		"batchId":     batchID,
+		"cameraId":    cameraID,
+		"merkleRoot":  merkleRoot,
+		"windowStart": windowStart,
+		"windowEnd":   windowEnd,
+		"eventIds":    eventIDs,
+		"eventHashes": eventHashes,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payloadJSON)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func verifyDeviceSignature(deviceCertPEM string, signatureB64 string, payloadHashHex string, cameraID string) (string, string, error) {
+	certPEM := strings.TrimSpace(deviceCertPEM)
+	sigText := strings.TrimSpace(signatureB64)
+	hashText := strings.ToLower(strings.TrimSpace(payloadHashHex))
+	if certPEM == "" || sigText == "" || hashText == "" {
+		return "", "", fmt.Errorf("device signature fields cannot be empty")
+	}
+
+	payloadHashBytes, err := hex.DecodeString(hashText)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid payloadHashHex: %v", err)
+	}
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return "", "", fmt.Errorf("invalid device cert PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse device cert: %v", err)
+	}
+
+	identityLabel := strings.TrimSpace(cert.Subject.CommonName)
+	if identityLabel == "" {
+		identityLabel = cert.Subject.String()
+	}
+
+	orgRef := strings.ToLower(cert.Subject.String() + "|" + cert.Issuer.String() + "|" + strings.Join(cert.DNSNames, ",") + "|" + strings.Join(cert.EmailAddresses, ","))
+	if !strings.Contains(orgRef, "org1") {
+		return "", "", fmt.Errorf("device cert is not scoped to Org1")
+	}
+	if strings.TrimSpace(cameraID) != "" {
+		camRef := strings.ToLower(strings.TrimSpace(cameraID))
+		if !strings.Contains(strings.ToLower(identityLabel), camRef) && !strings.Contains(orgRef, camRef) {
+			return "", "", fmt.Errorf("device cert identity does not match cameraId %s", cameraID)
+		}
+	}
+
+	sigBytes, err := base64.StdEncoding.DecodeString(sigText)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid signatureB64: %v", err)
+	}
+
+	var sig ecdsaSignature
+	rest, err := asn1.Unmarshal(sigBytes, &sig)
+	if err != nil || len(rest) != 0 || sig.R == nil || sig.S == nil {
+		return "", "", fmt.Errorf("invalid ECDSA ASN.1 signature")
+	}
+
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return "", "", fmt.Errorf("device cert public key is not ECDSA")
+	}
+	if !ecdsa.Verify(pub, payloadHashBytes, sig.R, sig.S) {
+		return "", "", fmt.Errorf("device signature verification failed")
+	}
+
+	fp := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(fp[:]), identityLabel, nil
+}
+
+// InitLedger adds a base set of evidences to the ledger.
 func (s *EvidenceSmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
 	evidences := []Evidence{
 		{ID: "event_init_01", Timestamp: time.Now().Unix(), CameraID: "init_cam", EventType: "system_start", EvidenceHash: "init_hash", ObjectCount: 0},
@@ -56,7 +265,11 @@ func (s *EvidenceSmartContract) InitLedger(ctx contractapi.TransactionContextInt
 }
 
 // CreateEvidence issues a new evidence to the world state with given details.
-func (s *EvidenceSmartContract) CreateEvidence(ctx contractapi.TransactionContextInterface, id string, cameraId string, eventType string, objectCount int, evidenceHash string, rawDataUrl string) error {
+func (s *EvidenceSmartContract) CreateEvidence(ctx contractapi.TransactionContextInterface, id string, cameraID string, eventType string, objectCount int, evidenceHash string, rawDataURL string) error {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP); err != nil {
+		return err
+	}
+
 	exists, err := s.EvidenceExists(ctx, id)
 	if err != nil {
 		return err
@@ -68,12 +281,12 @@ func (s *EvidenceSmartContract) CreateEvidence(ctx contractapi.TransactionContex
 	evidence := Evidence{
 		ID:           id,
 		Timestamp:    time.Now().Unix(),
-		CameraID:     cameraId,
+		CameraID:     cameraID,
 		EventType:    eventType,
 		ObjectCount:  objectCount,
-		EvidenceHash: evidenceHash,
-		RawDataURL:   rawDataUrl,
-		Location:     "default_location", // Simplified for now
+		EvidenceHash: strings.ToLower(strings.TrimSpace(evidenceHash)),
+		RawDataURL:   rawDataURL,
+		Location:     "default_location",
 	}
 	evidenceJSON, err := json.Marshal(evidence)
 	if err != nil {
@@ -87,13 +300,21 @@ func (s *EvidenceSmartContract) CreateEvidence(ctx contractapi.TransactionContex
 func (s *EvidenceSmartContract) CreateEvidenceBatch(
 	ctx contractapi.TransactionContextInterface,
 	batchID string,
-	cameraId string,
-	eventType string,
-	objectCount int,
-	evidenceHash string,
-	rawDataUrl string,
+	cameraID string,
+	merkleRoot string,
+	windowStart int64,
+	windowEnd int64,
 	eventIDsJSON string,
+	eventHashesJSON string,
+	deviceCertPEM string,
+	signatureB64 string,
+	payloadHashHex string,
 ) error {
+	signerMSP, err := s.requireMSP(ctx, org1MSP, org2MSP)
+	if err != nil {
+		return err
+	}
+
 	exists, err := s.EvidenceExists(ctx, batchID)
 	if err != nil {
 		return err
@@ -110,9 +331,21 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 		return fmt.Errorf("eventIDs cannot be empty")
 	}
 
+	var eventHashes []string
+	if err := json.Unmarshal([]byte(eventHashesJSON), &eventHashes); err != nil {
+		return fmt.Errorf("invalid eventHashes JSON: %v", err)
+	}
+	if len(eventHashes) == 0 {
+		return fmt.Errorf("eventHashes cannot be empty")
+	}
+	if len(eventIDs) != len(eventHashes) {
+		return fmt.Errorf("eventIDs/eventHashes length mismatch")
+	}
+
 	seen := map[string]bool{}
 	normalizedEventIDs := make([]string, 0, len(eventIDs))
-	for _, raw := range eventIDs {
+	normalizedEventHashes := make([]string, 0, len(eventHashes))
+	for idx, raw := range eventIDs {
 		eventID := strings.TrimSpace(raw)
 		if eventID == "" {
 			return fmt.Errorf("eventID cannot be empty")
@@ -122,6 +355,15 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 		}
 		seen[eventID] = true
 		normalizedEventIDs = append(normalizedEventIDs, eventID)
+
+		eventHash := strings.ToLower(strings.TrimSpace(eventHashes[idx]))
+		if eventHash == "" {
+			return fmt.Errorf("eventHash cannot be empty for eventID %s", eventID)
+		}
+		if _, err := hex.DecodeString(eventHash); err != nil {
+			return fmt.Errorf("invalid eventHash for eventID %s: %v", eventID, err)
+		}
+		normalizedEventHashes = append(normalizedEventHashes, eventHash)
 	}
 
 	for _, eventID := range normalizedEventIDs {
@@ -134,22 +376,56 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 		}
 	}
 
-	now := time.Now().Unix()
-	if objectCount <= 0 {
-		objectCount = len(normalizedEventIDs)
+	normalizedRoot := strings.ToLower(strings.TrimSpace(merkleRoot))
+	if normalizedRoot == "" {
+		return fmt.Errorf("merkleRoot cannot be empty")
+	}
+	if _, err := hex.DecodeString(normalizedRoot); err != nil {
+		return fmt.Errorf("invalid merkleRoot: %v", err)
 	}
 
-	batchEvidence := Evidence{
-		ID:           batchID,
-		Timestamp:    now,
-		CameraID:     cameraId,
-		EventType:    eventType,
-		ObjectCount:  objectCount,
-		EvidenceHash: evidenceHash,
-		RawDataURL:   rawDataUrl,
-		Location:     "default_location",
+	expectedPayloadHash, err := canonicalBatchPayloadHash(
+		batchID,
+		cameraID,
+		normalizedRoot,
+		windowStart,
+		windowEnd,
+		normalizedEventIDs,
+		normalizedEventHashes,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build payload hash: %v", err)
 	}
-	batchJSON, err := json.Marshal(batchEvidence)
+	normalizedPayloadHash := strings.ToLower(strings.TrimSpace(payloadHashHex))
+	if normalizedPayloadHash == "" {
+		return fmt.Errorf("payloadHashHex cannot be empty")
+	}
+	if normalizedPayloadHash != expectedPayloadHash {
+		return fmt.Errorf("payloadHash mismatch")
+	}
+
+	deviceCertSHA256, deviceIdentityLabel, err := verifyDeviceSignature(deviceCertPEM, signatureB64, normalizedPayloadHash, cameraID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Unix()
+	batchRecord := MerkleBatch{
+		ID:                  batchID,
+		MerkleRoot:          normalizedRoot,
+		CameraID:            cameraID,
+		EventCount:          len(normalizedEventIDs),
+		EventIDs:            normalizedEventIDs,
+		WindowStart:         windowStart,
+		WindowEnd:           windowEnd,
+		Timestamp:           now,
+		PayloadHash:         normalizedPayloadHash,
+		Signature:           strings.TrimSpace(signatureB64),
+		DeviceCertSHA256:    deviceCertSHA256,
+		SignerMSP:           signerMSP,
+		DeviceIdentityLabel: deviceIdentityLabel,
+	}
+	batchJSON, err := json.Marshal(batchRecord)
 	if err != nil {
 		return err
 	}
@@ -158,13 +434,14 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 	}
 
 	for idx, eventID := range normalizedEventIDs {
+		memberHash := normalizedEventHashes[idx]
 		eventEvidence := Evidence{
 			ID:           eventID,
 			Timestamp:    now,
-			CameraID:     cameraId,
+			CameraID:     cameraID,
 			EventType:    "batch_member",
 			ObjectCount:  1,
-			EvidenceHash: evidenceHash,
+			EvidenceHash: memberHash,
 			RawDataURL:   fmt.Sprintf("batch://%s#%d", batchID, idx),
 			Location:     "default_location",
 		}
@@ -182,6 +459,10 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 
 // ReadEvidence returns the evidence stored in the world state with given id.
 func (s *EvidenceSmartContract) ReadEvidence(ctx contractapi.TransactionContextInterface, id string) (*Evidence, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
 	evidenceJSON, err := ctx.GetStub().GetState(id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from world state: %v", err)
@@ -199,7 +480,31 @@ func (s *EvidenceSmartContract) ReadEvidence(ctx contractapi.TransactionContextI
 	return &evidence, nil
 }
 
-// EvidenceExists returns true when asset with given ID exists in world state
+// ReadMerkleBatch returns one MerkleBatch by batch ID.
+func (s *EvidenceSmartContract) ReadMerkleBatch(ctx contractapi.TransactionContextInterface, batchID string) (*MerkleBatch, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
+	batchJSON, err := ctx.GetStub().GetState(batchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read batch %s: %v", batchID, err)
+	}
+	if batchJSON == nil {
+		return nil, fmt.Errorf("the batch %s does not exist", batchID)
+	}
+
+	var batch MerkleBatch
+	if err := json.Unmarshal(batchJSON, &batch); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(batch.MerkleRoot) == "" {
+		return nil, fmt.Errorf("key %s is not a merkle batch", batchID)
+	}
+	return &batch, nil
+}
+
+// EvidenceExists returns true when asset with given ID exists in world state.
 func (s *EvidenceSmartContract) EvidenceExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
 	evidenceJSON, err := ctx.GetStub().GetState(id)
 	if err != nil {
@@ -209,9 +514,12 @@ func (s *EvidenceSmartContract) EvidenceExists(ctx contractapi.TransactionContex
 	return evidenceJSON != nil, nil
 }
 
-// GetAllEvidences returns all evidences found in world state
+// GetAllEvidences returns all evidence-like records found in world state.
 func (s *EvidenceSmartContract) GetAllEvidences(ctx contractapi.TransactionContextInterface) ([]*Evidence, error) {
-	// range query with empty string for startKey and endKey does an open-ended query of all assets in the chaincode namespace.
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
 	resultsIterator, err := ctx.GetStub().GetStateByRange("", "")
 	if err != nil {
 		return nil, err
@@ -224,11 +532,17 @@ func (s *EvidenceSmartContract) GetAllEvidences(ctx contractapi.TransactionConte
 		if err != nil {
 			return nil, err
 		}
+		if strings.HasPrefix(queryResponse.Key, rectificationPrefix) || strings.HasPrefix(queryResponse.Key, rawEvidenceHashPrefix) {
+			continue
+		}
 
 		var evidence Evidence
 		err = json.Unmarshal(queryResponse.Value, &evidence)
 		if err != nil {
-			return nil, err
+			continue
+		}
+		if strings.TrimSpace(evidence.ID) == "" {
+			continue
 		}
 		evidences = append(evidences, &evidence)
 	}
@@ -236,18 +550,440 @@ func (s *EvidenceSmartContract) GetAllEvidences(ctx contractapi.TransactionConte
 	return evidences, nil
 }
 
-// VerifyEvidence checks if the provided hash matches the stored hash for a given evidence ID
+// VerifyEvidence checks if the provided hash matches the stored hash for a given evidence ID.
 func (s *EvidenceSmartContract) VerifyEvidence(ctx contractapi.TransactionContextInterface, id string, hashToVerify string) (bool, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return false, err
+	}
+
 	evidence, err := s.ReadEvidence(ctx, id)
 	if err != nil {
 		return false, err
 	}
 
-	return evidence.EvidenceHash == hashToVerify, nil
+	return evidence.EvidenceHash == strings.ToLower(strings.TrimSpace(hashToVerify)), nil
+}
+
+// VerifyEvent validates one event leaf hash against a Merkle root using the provided proof.
+func (s *EvidenceSmartContract) VerifyEvent(
+	ctx contractapi.TransactionContextInterface,
+	batchID string,
+	eventHash string,
+	merkleProofJSON string,
+	merkleRoot string,
+) (bool, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return false, err
+	}
+
+	batchJSON, err := ctx.GetStub().GetState(batchID)
+	if err != nil {
+		return false, fmt.Errorf("failed to read batch %s: %v", batchID, err)
+	}
+	if batchJSON == nil {
+		return false, nil
+	}
+
+	var batch MerkleBatch
+	if err := json.Unmarshal(batchJSON, &batch); err != nil {
+		return false, fmt.Errorf("failed to decode batch %s: %v", batchID, err)
+	}
+	if strings.TrimSpace(batch.MerkleRoot) == "" {
+		return false, nil
+	}
+
+	expectedRoot := strings.ToLower(strings.TrimSpace(merkleRoot))
+	storedRoot := strings.ToLower(strings.TrimSpace(batch.MerkleRoot))
+	if expectedRoot == "" || storedRoot != expectedRoot {
+		return false, nil
+	}
+
+	var proof []MerkleProofStep
+	if err := json.Unmarshal([]byte(merkleProofJSON), &proof); err != nil {
+		return false, fmt.Errorf("invalid merkle proof JSON: %v", err)
+	}
+
+	leaf := strings.ToLower(strings.TrimSpace(eventHash))
+	if leaf == "" {
+		return false, nil
+	}
+	node, err := hex.DecodeString(leaf)
+	if err != nil {
+		return false, fmt.Errorf("invalid eventHash: %v", err)
+	}
+
+	for _, step := range proof {
+		sibling, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(step.Hash)))
+		if err != nil {
+			return false, fmt.Errorf("invalid proof hash: %v", err)
+		}
+
+		switch strings.ToLower(strings.TrimSpace(step.Position)) {
+		case "left":
+			sum := sha256.Sum256(append(sibling, node...))
+			node = sum[:]
+		case "right":
+			sum := sha256.Sum256(append(node, sibling...))
+			node = sum[:]
+		default:
+			return false, fmt.Errorf("invalid proof position: %s", step.Position)
+		}
+	}
+
+	computedRoot := hex.EncodeToString(node)
+	return computedRoot == storedRoot, nil
+}
+
+// PutRawEvidencePrivate stores raw evidence content in private data collection (Org1+Org2).
+func (s *EvidenceSmartContract) PutRawEvidencePrivate(
+	ctx contractapi.TransactionContextInterface,
+	eventID string,
+	imageBase64 string,
+	mimeType string,
+	imageSHA256 string,
+) error {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP); err != nil {
+		return err
+	}
+
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return fmt.Errorf("eventID cannot be empty")
+	}
+
+	imageBase64 = strings.TrimSpace(imageBase64)
+	mimeType = strings.TrimSpace(mimeType)
+	imageSHA256 = strings.TrimSpace(imageSHA256)
+
+	// Optional transient payload support for large private evidence:
+	// --transient '{"rawEvidence":"<base64-json>"}'
+	// JSON schema: {"imageBase64":"...","mimeType":"image/jpeg","imageSHA256":"..."}
+	if imageBase64 == "" {
+		transientMap, err := ctx.GetStub().GetTransient()
+		if err != nil {
+			return fmt.Errorf("failed to read transient map: %v", err)
+		}
+		if raw, ok := transientMap["rawEvidence"]; ok && len(raw) > 0 {
+			var transientPayload struct {
+				ImageBase64 string `json:"imageBase64"`
+				MimeType    string `json:"mimeType"`
+				ImageSHA256 string `json:"imageSHA256"`
+			}
+			if err := json.Unmarshal(raw, &transientPayload); err != nil {
+				return fmt.Errorf("invalid transient rawEvidence payload: %v", err)
+			}
+			imageBase64 = strings.TrimSpace(transientPayload.ImageBase64)
+			if mimeType == "" {
+				mimeType = strings.TrimSpace(transientPayload.MimeType)
+			}
+			if imageSHA256 == "" {
+				imageSHA256 = strings.TrimSpace(transientPayload.ImageSHA256)
+			}
+		}
+	}
+	if imageBase64 == "" {
+		return fmt.Errorf("imageBase64 cannot be empty")
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil {
+		return fmt.Errorf("imageBase64 is not valid base64: %v", err)
+	}
+	computed := sha256.Sum256(decoded)
+	computedHex := hex.EncodeToString(computed[:])
+
+	normalizedHash := strings.ToLower(imageSHA256)
+	if normalizedHash == "" {
+		normalizedHash = computedHex
+	}
+	if normalizedHash != computedHex {
+		return fmt.Errorf("imageSHA256 mismatch")
+	}
+
+	privateRecord := RawEvidencePrivate{
+		EventID:     eventID,
+		ImageBase64: imageBase64,
+		MimeType:    mimeType,
+		ImageSHA256: normalizedHash,
+		Timestamp:   time.Now().Unix(),
+	}
+	privateJSON, err := json.Marshal(privateRecord)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutPrivateData(collectionRawEvidence, eventID, privateJSON); err != nil {
+		return fmt.Errorf("failed to put private data: %v", err)
+	}
+
+	hashRecord := RawEvidenceHash{
+		EventID:     eventID,
+		ImageSHA256: normalizedHash,
+		Timestamp:   privateRecord.Timestamp,
+		Collection:  collectionRawEvidence,
+	}
+	hashJSON, err := json.Marshal(hashRecord)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(rawEvidenceHashKey(eventID), hashJSON)
+}
+
+// GetRawEvidencePrivate returns full private raw evidence (Org1+Org2 only).
+func (s *EvidenceSmartContract) GetRawEvidencePrivate(ctx contractapi.TransactionContextInterface, eventID string) (*RawEvidencePrivate, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP); err != nil {
+		return nil, err
+	}
+
+	data, err := ctx.GetStub().GetPrivateData(collectionRawEvidence, strings.TrimSpace(eventID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read private data: %v", err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("private raw evidence %s does not exist", eventID)
+	}
+
+	var privateRecord RawEvidencePrivate
+	if err := json.Unmarshal(data, &privateRecord); err != nil {
+		return nil, err
+	}
+	return &privateRecord, nil
+}
+
+// GetRawEvidenceHash returns public hash metadata for one private raw evidence.
+func (s *EvidenceSmartContract) GetRawEvidenceHash(ctx contractapi.TransactionContextInterface, eventID string) (*RawEvidenceHash, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
+	hashJSON, err := ctx.GetStub().GetState(rawEvidenceHashKey(strings.TrimSpace(eventID)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read raw evidence hash: %v", err)
+	}
+	if hashJSON == nil {
+		return nil, fmt.Errorf("raw evidence hash for %s does not exist", eventID)
+	}
+
+	var hashRecord RawEvidenceHash
+	if err := json.Unmarshal(hashJSON, &hashRecord); err != nil {
+		return nil, err
+	}
+	return &hashRecord, nil
+}
+
+// CreateRectificationOrder opens one rectification order (Org2 only).
+func (s *EvidenceSmartContract) CreateRectificationOrder(
+	ctx contractapi.TransactionContextInterface,
+	orderID string,
+	batchID string,
+	assignedTo string,
+	deadline int64,
+	comment string,
+) error {
+	if _, err := s.requireMSP(ctx, org2MSP); err != nil {
+		return err
+	}
+
+	orderID = strings.TrimSpace(orderID)
+	batchID = strings.TrimSpace(batchID)
+	if orderID == "" || batchID == "" {
+		return fmt.Errorf("orderID and batchID cannot be empty")
+	}
+
+	batchBytes, err := ctx.GetStub().GetState(batchID)
+	if err != nil {
+		return err
+	}
+	if batchBytes == nil {
+		return fmt.Errorf("batch %s does not exist", batchID)
+	}
+
+	exists, err := ctx.GetStub().GetState(rectificationKey(orderID))
+	if err != nil {
+		return err
+	}
+	if exists != nil {
+		return fmt.Errorf("rectification order %s already exists", orderID)
+	}
+
+	now := time.Now().Unix()
+	order := RectificationOrder{
+		ID:          orderID,
+		BatchID:     batchID,
+		CreatedBy:   org2MSP,
+		AssignedTo:  strings.TrimSpace(assignedTo),
+		Status:      "OPEN",
+		Deadline:    deadline,
+		Attachments: []string{},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		History: []RectificationHistoryEntry{
+			{At: now, ByMSP: org2MSP, Action: "CREATE", Comment: strings.TrimSpace(comment)},
+		},
+	}
+
+	orderJSON, err := json.Marshal(order)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(rectificationKey(orderID), orderJSON)
+}
+
+// SubmitRectification submits remediation artifacts (Org1 only).
+func (s *EvidenceSmartContract) SubmitRectification(ctx contractapi.TransactionContextInterface, orderID string, attachmentURL string, comment string) error {
+	if _, err := s.requireMSP(ctx, org1MSP); err != nil {
+		return err
+	}
+
+	order, err := s.ReadRectificationOrder(ctx, orderID)
+	if err != nil {
+		return err
+	}
+	if order.Status != "OPEN" && order.Status != "REJECTED" {
+		return fmt.Errorf("rectification order %s is not submittable in status %s", orderID, order.Status)
+	}
+
+	order.Status = "SUBMITTED"
+	order.UpdatedAt = time.Now().Unix()
+	if trimmed := strings.TrimSpace(attachmentURL); trimmed != "" {
+		order.Attachments = append(order.Attachments, trimmed)
+	}
+	order.History = append(order.History, RectificationHistoryEntry{
+		At:      order.UpdatedAt,
+		ByMSP:   org1MSP,
+		Action:  "SUBMIT",
+		Comment: strings.TrimSpace(comment),
+	})
+
+	orderJSON, err := json.Marshal(order)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(rectificationKey(strings.TrimSpace(orderID)), orderJSON)
+}
+
+// ConfirmRectification confirms/rejects remediation submission (Org2 only).
+func (s *EvidenceSmartContract) ConfirmRectification(ctx contractapi.TransactionContextInterface, orderID string, approved bool, comment string) error {
+	if _, err := s.requireMSP(ctx, org2MSP); err != nil {
+		return err
+	}
+
+	order, err := s.ReadRectificationOrder(ctx, orderID)
+	if err != nil {
+		return err
+	}
+	if order.Status != "SUBMITTED" {
+		return fmt.Errorf("rectification order %s is not confirmable in status %s", orderID, order.Status)
+	}
+
+	order.UpdatedAt = time.Now().Unix()
+	if approved {
+		order.Status = "CONFIRMED"
+	} else {
+		order.Status = "REJECTED"
+	}
+	order.History = append(order.History, RectificationHistoryEntry{
+		At:      order.UpdatedAt,
+		ByMSP:   org2MSP,
+		Action:  "CONFIRM",
+		Comment: strings.TrimSpace(comment),
+	})
+
+	orderJSON, err := json.Marshal(order)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(rectificationKey(strings.TrimSpace(orderID)), orderJSON)
+}
+
+// ReadRectificationOrder returns one rectification order.
+func (s *EvidenceSmartContract) ReadRectificationOrder(ctx contractapi.TransactionContextInterface, orderID string) (*RectificationOrder, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
+	orderJSON, err := ctx.GetStub().GetState(rectificationKey(strings.TrimSpace(orderID)))
+	if err != nil {
+		return nil, err
+	}
+	if orderJSON == nil {
+		return nil, fmt.Errorf("rectification order %s does not exist", orderID)
+	}
+
+	var order RectificationOrder
+	if err := json.Unmarshal(orderJSON, &order); err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+// ExportAuditTrail exports one complete audit object for a batch (Org1/2/3 allowed).
+func (s *EvidenceSmartContract) ExportAuditTrail(ctx contractapi.TransactionContextInterface, batchID string) (*AuditTrail, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
+	batch, err := s.ReadMerkleBatch(ctx, batchID)
+	if err != nil {
+		return nil, err
+	}
+
+	events := make([]*Evidence, 0, len(batch.EventIDs))
+	for _, eventID := range batch.EventIDs {
+		evidenceJSON, err := ctx.GetStub().GetState(eventID)
+		if err != nil {
+			return nil, err
+		}
+		if evidenceJSON == nil {
+			continue
+		}
+
+		var evidence Evidence
+		if err := json.Unmarshal(evidenceJSON, &evidence); err != nil {
+			continue
+		}
+		events = append(events, &evidence)
+	}
+
+	rectifications := []*RectificationOrder{}
+	iter, err := ctx.GetStub().GetStateByRange(rectificationPrefix, rectificationPrefix+"\uffff")
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.HasNext() {
+		item, err := iter.Next()
+		if err != nil {
+			return nil, err
+		}
+		var order RectificationOrder
+		if err := json.Unmarshal(item.Value, &order); err != nil {
+			continue
+		}
+		if order.BatchID != batchID {
+			continue
+		}
+		o := order
+		rectifications = append(rectifications, &o)
+	}
+
+	sort.Slice(rectifications, func(i, j int) bool {
+		return rectifications[i].UpdatedAt < rectifications[j].UpdatedAt
+	})
+
+	return &AuditTrail{
+		Batch:          batch,
+		Events:         events,
+		Rectifications: rectifications,
+	}, nil
 }
 
 // GetHistoryForKey returns all historical versions of one key.
 func (s *EvidenceSmartContract) GetHistoryForKey(ctx contractapi.TransactionContextInterface, id string) ([]*KeyHistory, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
 	resultsIterator, err := ctx.GetStub().GetHistoryForKey(id)
 	if err != nil {
 		return nil, err

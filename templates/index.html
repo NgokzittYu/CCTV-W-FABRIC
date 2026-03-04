@@ -201,6 +201,17 @@
                 class="flex-1 flex items-center overflow-x-auto hide-sb px-2 py-3 gap-0 rounded-xl border border-gray-100 bg-gradient-to-r from-slate-50/80 to-white min-h-[150px]">
                 <p class="text-gray-300 text-sm italic mx-auto" id="empty-state">Waiting for first block…</p>
             </div>
+
+            <!-- Manual Verification -->
+            <div class="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-3">
+                <div class="flex items-center gap-3">
+                    <input type="text" id="manualEventId" placeholder="Enter event_id (e.g. event_12345)" class="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 placeholder-gray-400 font-mono">
+                    <button id="manualVerifyBtn" onclick="onManualVerify()" class="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Verify</button>
+                    <button onclick="onManualClear()" class="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 transition-colors">Clear</button>
+                </div>
+                <div id="manualResultArea" class="hidden text-sm bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
+                </div>
+            </div>
         </section>
     </main>
 
@@ -374,6 +385,9 @@
         const mCard = document.getElementById('verifyCard');
 
         function openModal(d) {
+            const manualInput = document.getElementById('manualEventId');
+            if (manualInput) manualInput.value = d.id;
+            
             document.getElementById('modalEventId').innerText = d.id;
             document.getElementById('modalTxId').innerText = d.tx_id || '…';
             document.getElementById('modalBlockNum').innerText = d.block_number ? `#${d.block_number}` : '#?';
@@ -394,30 +408,112 @@
             verify(d.id);
         }
 
-        async function verify(id) {
+        function normalizeEventId(input) {
+            return input.trim().replace(/\.json$/, '');
+        }
+
+        async function fetchVerifyResult(eventId) {
             try {
-                const r = await (await fetch(`/api/verify/${id}`, { method: 'POST' })).json();
-                if (r.status === 'success') {
-                    document.getElementById('localHash').innerText = r.local_hash;
-                    document.getElementById('chainHash').innerText = r.chain_hash || 'N/A';
-                    document.getElementById('proofRoot').innerText = r.proof_root || 'N/A';
-                    document.getElementById('modalBatchId').innerText = r.batch_id || 'N/A';
-                    if (r.tx_id) document.getElementById('modalTxId').innerText = r.tx_id;
-                    if (r.block_number) document.getElementById('modalBlockNum').innerText = `#${r.block_number}`;
-                    if (r.onchain_time) {
-                        document.getElementById('onchainTime').innerText = new Date(Number(r.onchain_time) * 1000).toLocaleString();
+                const res = await fetch(`/api/verify/${eventId}`, { method: 'POST' });
+                const r = await res.json();
+                if (!res.ok) {
+                    if (res.status === 404 || (r.message && r.message.toLowerCase().includes('not found'))) {
+                        return { status: 'error', message: '未上链/不存在 (Event not found on-chain)' };
                     }
-                    activeHistoryKey = r.history_key || id;
-                    loadHistory();
-                    const res = document.getElementById('verifyResult');
-                    res.innerHTML = r.match
-                        ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 text-green-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Proof Verified · Match</div>`
-                        : `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 text-red-700 font-medium"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Mismatch!</div>`;
-                    res.classList.remove('hidden');
-                } else {
-                    alert('Error: ' + r.message);
+                    return { status: 'error', message: r.message || 'Server error' };
                 }
-            } catch (e) { console.error(e); }
+                return r;
+            } catch (e) {
+                return { status: 'error', message: 'Network or parsing error' };
+            }
+        }
+
+        function renderVerifySummary(r) {
+            if (r.status !== 'success') {
+                return `<div class="text-red-600 font-medium mb-1 flex items-center gap-1.5"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>Error</div><div class="text-xs text-red-500 break-all">${r.message}</div>`;
+            }
+            const statusHtml = r.match
+                ? `<div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 font-medium text-xs mb-3"><svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Proof Verified · Match</div>`
+                : `<div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium text-xs mb-3"><svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Mismatch!</div>`;
+            
+            return `
+                ${statusHtml}
+                <div class="grid grid-cols-2 gap-2 text-[11px]">
+                    <div class="text-gray-500">Mode: <span class="text-gray-800 font-medium uppercase">${r.mode || 'N/A'}</span></div>
+                    <div class="text-gray-500">Block: <span class="text-gray-800 font-medium">${r.block_number ? '#' + r.block_number : 'N/A'}</span></div>
+                    <div class="text-gray-500 col-span-2">Batch ID: <span class="text-gray-800 font-mono break-all">${r.batch_id || 'N/A'}</span></div>
+                    <div class="text-gray-500 col-span-2">Tx ID: <span class="text-gray-800 font-mono break-all">${r.tx_id || 'N/A'}</span></div>
+                </div>
+                <div class="mt-3 space-y-1.5">
+                    <div class="text-gray-500 text-[10px] uppercase font-semibold">Local Hash</div>
+                    <div class="font-mono text-[10px] text-gray-800 bg-gray-50 p-2 rounded-md break-all border border-gray-100">${r.local_hash || 'N/A'}</div>
+                    <div class="text-gray-500 text-[10px] uppercase font-semibold mt-2 text-blue-500">Chain Hash</div>
+                    <div class="font-mono text-[10px] text-blue-800 bg-blue-50 p-2 rounded-md break-all border border-blue-100">${r.chain_hash || 'N/A'}</div>
+                    <div class="text-gray-500 text-[10px] uppercase font-semibold mt-2 text-indigo-500">Proof Root</div>
+                    <div class="font-mono text-[10px] text-indigo-800 bg-indigo-50 p-2 rounded-md break-all border border-indigo-100">${r.proof_root || 'N/A'}</div>
+                </div>
+            `;
+        }
+
+        async function onManualVerify() {
+            const inputEl = document.getElementById('manualEventId');
+            const btn = document.getElementById('manualVerifyBtn');
+            const resultArea = document.getElementById('manualResultArea');
+            
+            const rawVal = inputEl.value;
+            const eventId = normalizeEventId(rawVal);
+            if (!eventId) {
+                resultArea.innerHTML = `<div class="text-red-500 text-xs flex items-center gap-1"><svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>Please enter event_id.</div>`;
+                resultArea.classList.remove('hidden');
+                return;
+            }
+            inputEl.value = eventId;
+            
+            btn.disabled = true;
+            btn.innerText = 'Verifying...';
+            resultArea.innerHTML = `<div class="text-gray-500 text-xs flex items-center gap-2 animate-pulse"><div class="w-2 h-2 bg-blue-500 rounded-full"></div>Fetching from chain...</div>`;
+            resultArea.classList.remove('hidden');
+            
+            const r = await fetchVerifyResult(eventId);
+            resultArea.innerHTML = renderVerifySummary(r);
+            
+            btn.disabled = false;
+            btn.innerText = 'Verify';
+        }
+
+        function onManualClear() {
+            document.getElementById('manualEventId').value = '';
+            const resultArea = document.getElementById('manualResultArea');
+            resultArea.innerHTML = '';
+            resultArea.classList.add('hidden');
+        }
+
+        async function verify(id) {
+            const res = document.getElementById('verifyResult');
+            res.classList.add('hidden');
+            
+            const r = await fetchVerifyResult(id);
+            
+            if (r.status === 'success') {
+                document.getElementById('localHash').innerText = r.local_hash;
+                document.getElementById('chainHash').innerText = r.chain_hash || 'N/A';
+                document.getElementById('proofRoot').innerText = r.proof_root || 'N/A';
+                document.getElementById('modalBatchId').innerText = r.batch_id || 'N/A';
+                if (r.tx_id) document.getElementById('modalTxId').innerText = r.tx_id;
+                if (r.block_number) document.getElementById('modalBlockNum').innerText = `#${r.block_number}`;
+                if (r.onchain_time) {
+                    document.getElementById('onchainTime').innerText = new Date(Number(r.onchain_time) * 1000).toLocaleString();
+                }
+                activeHistoryKey = r.history_key || id;
+                loadHistory();
+                
+                res.innerHTML = r.match
+                    ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 text-green-700 font-medium"><svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Proof Verified · Match</div>`
+                    : `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 text-red-700 font-medium"><svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Mismatch!</div>`;
+            } else {
+                res.innerHTML = `<div class="inline-flex items-start gap-2 px-4 py-3 rounded-xl bg-red-50 text-red-600 font-medium text-sm text-left border border-red-100 w-full"><svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg><div class="flex-1">Verification Failed<span class="font-normal text-xs block break-all mt-1 text-red-500">${r.message}</span></div></div>`;
+            }
+            res.classList.remove('hidden');
         }
 
         async function loadHistory() {

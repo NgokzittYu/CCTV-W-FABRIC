@@ -1,7 +1,10 @@
 import asyncio
+from datetime import datetime
+import base64
 import hashlib
 import json
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -25,6 +28,10 @@ EVIDENCE_DIR = SETTINGS.evidence_dir
 CAMERA_ID = SETTINGS.camera_id
 CHAINCODE_NAME = SETTINGS.chaincode_name
 CHANNEL_NAME = SETTINGS.channel_name
+DEVICE_CERT_PATH = SETTINGS.device_cert_path
+DEVICE_KEY_PATH = SETTINGS.device_key_path
+DEVICE_SIGN_ALGO = SETTINGS.device_sign_algo
+DEVICE_SIGNATURE_REQUIRED = SETTINGS.device_signature_required
 
 # Event aggregation config
 AGGREGATE_MIN_FRAMES = SETTINGS.aggregate_min_frames
@@ -147,6 +154,115 @@ def sha256_digest(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
+def build_batch_signature_payload(
+    batch_id: str,
+    camera_id: str,
+    merkle_root: str,
+    window_start: int,
+    window_end: int,
+    event_ids: List[str],
+    event_hashes: List[str],
+) -> bytes:
+    payload = {
+        "batchId": batch_id,
+        "cameraId": camera_id,
+        "merkleRoot": merkle_root,
+        "windowStart": int(window_start),
+        "windowEnd": int(window_end),
+        "eventIds": event_ids,
+        "eventHashes": event_hashes,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _auto_generate_device_material(camera_id: str) -> Tuple[Path, Path]:
+    base_dir = Path(tempfile.gettempdir()) / "cctv_device_autogen"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    key_path = base_dir / f"{camera_id}.key.pem"
+    cert_path = base_dir / f"{camera_id}.cert.pem"
+    if key_path.exists() and cert_path.exists():
+        return cert_path, key_path
+
+    subj = f"/CN=device-{camera_id}@org1.example.com/O=Org1"
+    cmd = [
+        "openssl",
+        "req",
+        "-x509",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:P-256",
+        "-nodes",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+        "-days",
+        "365",
+        "-subj",
+        subj,
+    ]
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to auto-generate device key/cert")
+    return cert_path, key_path
+
+
+def sign_payload_with_device_key(payload_bytes: bytes, key_path: Path) -> str:
+    if DEVICE_SIGN_ALGO != "ECDSA_SHA256":
+        raise RuntimeError(f"unsupported DEVICE_SIGN_ALGO: {DEVICE_SIGN_ALGO}")
+    with tempfile.NamedTemporaryFile("wb", delete=False) as f:
+        f.write(payload_bytes)
+        payload_path = Path(f.name)
+    try:
+        cmd = ["openssl", "dgst", "-sha256", "-sign", str(key_path), "-binary", str(payload_path)]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0:
+            stderr = (proc.stderr or b"").decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(stderr or "openssl sign failed")
+        return base64.b64encode(proc.stdout).decode("ascii")
+    finally:
+        try:
+            payload_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def build_batch_signature_material(
+    batch_id: str,
+    camera_id: str,
+    merkle_root: str,
+    window_start: int,
+    window_end: int,
+    event_ids: List[str],
+    event_hashes: List[str],
+) -> Tuple[str, str, str]:
+    payload_bytes = build_batch_signature_payload(
+        batch_id,
+        camera_id,
+        merkle_root,
+        int(window_start),
+        int(window_end),
+        event_ids,
+        event_hashes,
+    )
+    payload_hash = hashlib.sha256(payload_bytes).hexdigest()
+
+    cert_path = DEVICE_CERT_PATH
+    key_path = DEVICE_KEY_PATH
+    if not cert_path.exists() or not key_path.exists():
+        if DEVICE_SIGNATURE_REQUIRED:
+            raise RuntimeError(
+                f"device cert/key not found: cert={cert_path}, key={key_path}, "
+                "set DEVICE_CERT_PATH and DEVICE_KEY_PATH"
+            )
+        cert_path, key_path = _auto_generate_device_material(camera_id)
+
+    cert_pem = cert_path.read_text(encoding="utf-8").strip()
+    signature_b64 = sign_payload_with_device_key(payload_bytes, key_path)
+    return cert_pem, signature_b64, payload_hash
+
+
 def build_merkle_root_and_proofs(leaf_hashes: List[str]) -> Tuple[str, List[List[Dict[str, str]]]]:
     if not leaf_hashes:
         raise ValueError("leaf_hashes cannot be empty")
@@ -217,7 +333,7 @@ def get_latest_block_number(env: Dict[str, str], channel: str) -> Optional[int]:
         return None
 
 
-def query_chaincode(function_name: str, args: List[str], timeout: int = 12) -> Dict[str, Any]:
+def query_chaincode(function_name: str, args: List[str], timeout: int = 12) -> Any:
     peer_bin = str(FABRIC_SAMPLES_PATH / "bin" / "peer")
     env, _, _ = get_fabric_config()
     env["FABRIC_CFG_PATH"] = str(FABRIC_SAMPLES_PATH / "config")
@@ -253,6 +369,36 @@ def broadcast_sync(payload: Dict[str, Any]):
 def write_event_json(path: Path, payload: Dict[str, Any]):
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _date_str_from_ts(ts_sec: float) -> str:
+    return datetime.fromtimestamp(ts_sec).strftime("%Y-%m-%d")
+
+
+def _resolve_event_paths(event_id: str) -> Tuple[Path, Path]:
+    """Resolve json/img paths for an event.
+    New layout:  evidences/events/<YYYY-MM-DD>/event_xxx.json
+    Fallback:    evidences/event_xxx.json  (legacy flat layout)
+    """
+    # Try to extract timestamp from event_id  (event_<ms>_<hex>)
+    try:
+        ts_ms = int(event_id.split("_")[1])
+        date_str = _date_str_from_ts(ts_ms / 1000.0)
+    except (IndexError, ValueError):
+        date_str = None
+
+    # New layout
+    if date_str:
+        new_dir = EVIDENCE_DIR / "events" / date_str
+        json_path = new_dir / f"{event_id}.json"
+        img_path = new_dir / f"{event_id}.jpg"
+        if json_path.exists():
+            return json_path, img_path
+
+    # Fallback to legacy flat layout
+    json_path = EVIDENCE_DIR / f"{event_id}.json"
+    img_path = EVIDENCE_DIR / f"{event_id}.jpg"
+    return json_path, img_path
 
 
 def build_event_id() -> str:
@@ -501,7 +647,10 @@ class MerkleBatchManager:
         merkle_root, proofs = build_merkle_root_and_proofs(leaf_hashes)
         batch_id = f"batch_{int(window_start)}_{int(window_end)}_{uuid.uuid4().hex[:6]}"
 
-        manifest_path = EVIDENCE_DIR / f"{batch_id}.json"
+        date_str = _date_str_from_ts(window_start)
+        batch_dir = EVIDENCE_DIR / "batches" / date_str
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = batch_dir / f"{batch_id}.json"
         manifest = {
             "batch_id": batch_id,
             "window_start": int(window_start),
@@ -527,14 +676,27 @@ class MerkleBatchManager:
         try:
             env, orderer_ca, org2_tls = get_fabric_config()
             event_ids = [e["event_id"] for e in batch_events]
+            event_hashes = [e["evidence_hash"] for e in batch_events]
+            device_cert_pem, signature_b64, payload_hash_hex = build_batch_signature_material(
+                batch_id,
+                CAMERA_ID,
+                merkle_root,
+                int(window_start),
+                int(window_end),
+                event_ids,
+                event_hashes,
+            )
             args = [
                 batch_id,
                 CAMERA_ID,
-                "merkle_batch",
-                str(len(batch_events)),
                 merkle_root,
-                f"file://{manifest_path.name}",
+                str(int(window_start)),
+                str(int(window_end)),
                 json.dumps(event_ids, ensure_ascii=False),
+                json.dumps(event_hashes, ensure_ascii=False),
+                device_cert_pem,
+                signature_b64,
+                payload_hash_hex,
             ]
             invoke_res = invoke_chaincode(
                 env,
@@ -551,6 +713,8 @@ class MerkleBatchManager:
                 f"[MERKLE] Anchored batch {batch_id}, events={len(batch_events)}, "
                 f"root={merkle_root[:12]}..., tx={tx_id or 'N/A'}"
             )
+            manifest["payload_hash"] = payload_hash_hex
+            manifest["signature_alg"] = DEVICE_SIGN_ALGO
         except Exception as e:
             status = "Failed"
             error_msg = str(e)
@@ -623,8 +787,12 @@ def process_event_worker(event_data: Dict[str, Any], frame_bytes: Optional[bytes
     event_data = dict(event_data)
     event_data["event_id"] = event_id
 
-    json_path = EVIDENCE_DIR / f"{event_id}.json"
-    img_path = EVIDENCE_DIR / f"{event_id}.jpg"
+    ts = float(event_data.get("timestamp", time.time()))
+    date_str = _date_str_from_ts(ts)
+    event_dir = EVIDENCE_DIR / "events" / date_str
+    event_dir.mkdir(parents=True, exist_ok=True)
+    json_path = event_dir / f"{event_id}.json"
+    img_path = event_dir / f"{event_id}.jpg"
 
     # Persist evidence first (event payload + raw frame)
     write_event_json(json_path, event_data)
@@ -750,8 +918,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/verify/{event_id}")
 async def verify_evidence(event_id: str):
     try:
-        json_path = EVIDENCE_DIR / f"{event_id}.json"
-        img_path = EVIDENCE_DIR / f"{event_id}.jpg"
+        json_path, img_path = _resolve_event_paths(event_id)
 
         if not json_path.exists() or not img_path.exists():
             return JSONResponse({"status": "error", "message": "Local evidence not found"}, status_code=404)
@@ -769,25 +936,46 @@ async def verify_evidence(event_id: str):
         stored_leaf_hash = local_data.get("evidence_hash", "") if isinstance(local_data, dict) else ""
         leaf_hash = stored_leaf_hash or local_hash
 
-        # Event keys are also written on chain by CreateEvidenceBatch.
         onchain_data = query_chaincode("ReadEvidence", [event_id])
+        if not isinstance(onchain_data, dict):
+            raise RuntimeError("unexpected chaincode response for ReadEvidence")
         chain_hash = onchain_data.get("evidenceHash", "")
 
         if merkle_meta:
             proof = merkle_meta.get("proof", [])
+            proof_json = json.dumps(proof, ensure_ascii=False)
+            batch_id = str(merkle_meta.get("batchId", "")).strip()
+            expected_root = str(merkle_meta.get("merkleRoot", "")).strip().lower()
             proof_root = apply_merkle_proof(leaf_hash, proof)
-            expected_root = merkle_meta.get("merkleRoot", "")
-            proof_valid = proof_root == expected_root == chain_hash
-            return {
+            verify_event_ok = False
+            verify_error = ""
+            if batch_id and leaf_hash and expected_root:
+                try:
+                    verify_raw = query_chaincode(
+                        "VerifyEvent",
+                        [batch_id, leaf_hash, proof_json, expected_root],
+                    )
+                    verify_event_ok = bool(verify_raw)
+                except Exception as verify_exc:
+                    verify_error = str(verify_exc)
+            else:
+                verify_error = "missing merkle metadata fields"
+
+            local_matches_leaf = bool(local_hash == leaf_hash)
+            chain_leaf_match = bool(chain_hash == leaf_hash)
+            proof_valid = bool(verify_event_ok and chain_leaf_match and local_matches_leaf)
+            result = {
                 "status": "success",
                 "mode": "merkle_batch",
                 "match": proof_valid,
                 "local_hash": local_hash,
                 "leaf_hash": leaf_hash,
-                "local_matches_leaf": bool(local_hash == leaf_hash),
+                "local_matches_leaf": local_matches_leaf,
+                "chain_leaf_match": chain_leaf_match,
+                "verify_event_ok": verify_event_ok,
                 "proof_root": proof_root,
                 "chain_hash": chain_hash,
-                "batch_id": merkle_meta.get("batchId"),
+                "batch_id": batch_id,
                 "batch_size": merkle_meta.get("batchSize"),
                 "proof_length": len(proof),
                 "onchain_time": onchain_data.get("timestamp"),
@@ -795,6 +983,9 @@ async def verify_evidence(event_id: str):
                 "block_number": anchor_meta.get("blockNumber"),
                 "history_key": event_id,
             }
+            if verify_error:
+                result["verify_error"] = verify_error
+            return result
 
         match = local_hash == chain_hash
         return {
@@ -809,7 +1000,10 @@ async def verify_evidence(event_id: str):
             "history_key": event_id,
         }
     except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower():
+            return JSONResponse({"status": "error", "message": "Event not found on-chain"}, status_code=404)
+        return JSONResponse({"status": "error", "message": error_msg}, status_code=500)
 
 
 @app.get("/api/history/{event_id}")
