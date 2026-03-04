@@ -1,284 +1,356 @@
-# 阶段三：多组织 + 设备可信（信任架构）执行计划
+# 实施计划 - 阶段四：前端业务联动
 
-目标：把“多方互不信任”的叙事落到可运行系统，完成 3 Org 网络、设备签名、链码验签、隐私数据隔离与方法级访问控制。
-
-当前进度（2026-03-04）：
-- 仓库内代码与脚本改造已基本完成（ACL/验签/PDC/整改流/审计导出/文档同步）。
-- 仍需在本机 Fabric 环境执行联调（3 Org 实际拉起、deployCC、端到端验收脚本）。
+## 概述
+链码已支持整改工单 + 权限 + 审计，现在需要前端和 API 把它们串起来。
 
 ---
 
-## 0. 执行前提（编程 AI 必读）
+## 1. 工单管理 REST API
 
-- 当前仓库链码为 `chaincode/chaincode.go`（单链码）。
-- 当前 Web 入口为 `web_app.py`，批量上链走 `CreateEvidenceBatch`。
-- Fabric 运行目录在 `~/projects/fabric-samples/test-network`。
+### 1.1 创建工单接口
+- **路径**: `POST /api/workorder/create`
+- **功能**: 创建新的整改工单
+- **请求体**:
+  ```json
+  {
+    "violationId": "string",
+    "description": "string",
+    "assignedOrg": "string",
+    "deadline": "timestamp"
+  }
+  ```
+- **实现要点**:
+  - 调用链码 `CreateWorkOrder` 方法
+  - 验证调用者权限（仅监管方可创建）
+  - 返回工单 ID 和创建状态
 
-关键技术约束（必须按这个实现）：
+### 1.2 提交整改接口
+- **路径**: `POST /api/workorder/{id}/rectify`
+- **功能**: 责任方提交整改证明
+- **请求体**:
+  ```json
+  {
+    "rectificationProof": "string",
+    "attachments": ["url1", "url2"]
+  }
+  ```
+- **实现要点**:
+  - 调用链码 `SubmitRectification` 方法
+  - 验证调用者为工单责任方
+  - 更新工单状态为 "待确认"
 
-1. Fabric lifecycle 背书策略是“链码级”，不是“函数级”。
-2. 因此“EvidenceCommit / RectificationWorkflow 写操作都需 Org1+Org2 背书”应通过链码级策略实现。
-3. 查询类函数（如 `VerifyEvent`、`ExportAuditTrail`）不走背书策略，Org3 独立验真通过“Org3 自己 peer 查询 + 链码内 ACL”实现。
-4. 方法级权限（Org3 禁写）由链码中 `MSP` 校验实现，不依赖 channel ACL 单独完成。
+### 1.3 确认关闭接口
+- **路径**: `POST /api/workorder/{id}/confirm`
+- **功能**: 监管方确认整改并关闭工单
+- **请求体**:
+  ```json
+  {
+    "approved": true,
+    "comments": "string"
+  }
+  ```
+- **实现要点**:
+  - 调用链码 `ConfirmWorkOrder` 方法
+  - 验证调用者为监管方
+  - 若不通过，工单状态回退到 "待整改"
 
----
-
-## 1. 目标架构与验收标准
-
-### 1.1 三组织角色
-
-| Org | 角色 | 职责 | Fabric 组件 |
-|---|---|---|---|
-| Org1 | 施工方/企业 | 摄像头部署、证据采集、整改提交 | peer0.org1 + CA-Org1 |
-| Org2 | 监管方/交管 | 证据审核、工单签发、整改确认 | peer0.org2 + CA-Org2 |
-| Org3 | 保险/审计方 | 独立验真、审计导出、理赔依据 | peer0.org3 + CA-Org3 |
-
-### 1.2 背书与权限目标
-
-- 写入链上存证：`AND('Org1MSP.peer','Org2MSP.peer')`
-- 整改状态写入：`AND('Org1MSP.peer','Org2MSP.peer')`
-- 审计查询：Org3 可独立执行查询（不依赖 Org1/Org2）
-- ACL：Org3 禁止调用写接口（`CreateEvidence*`, `CreateRectification*`, `ConfirmRectification*`）
-
-### 1.3 验收通过定义（DoD）
-
-1. Org1 单独发起存证交易提交失败（背书不足）。
-2. Org1+Org2 双背书存证提交成功。
-3. Org3 调用 `VerifyEvent`、`ExportAuditTrail` 成功。
-4. Org3 调用写接口返回“permission denied”。
-5. 设备签名错误时，`CreateEvidenceBatch` 明确报错并拒绝写入。
-6. PDC 中原始图片只有 Org1/Org2 可读，Org3 只能看到哈希/元数据。
-
----
-
-## 2. 交付物清单（必须产出）
-
-### 2.1 仓库内新增/修改
-
-- [x] `chaincode/chaincode.go`：新增 ACL、设备签名验签、整改流程、审计导出、PDC 接口。
-- [x] `chaincode/collections_config.json`：定义 `collectionRawEvidence`。
-- [x] `chaincode/chaincode_test.go`：补充阶段三测试用例。
-- [x] `web_app.py`：批量上链接口增加签名字段；新增私有数据写入流程。
-- [x] `anchor_to_fabric.py`：支持设备签名与（可选）transient 数据。
-- [x] `config.py` + `.env.example`：增加 Org3 与设备签名配置项。
-- [x] `scripts/stage3_setup_network.sh`：3 Org 网络部署脚本（调用 test-network/addOrg3）。
-- [x] `scripts/stage3_verify.sh`：背书/ACL/PDC 全链路验证脚本。
-- [x] `README.md` + `FABRIC_RUNBOOK.md`：同步阶段三说明与命令。
-
-### 2.2 fabric-samples 外部改动（通过脚本驱动）
-
-- [ ] 启动 test-network 后引入 Org3（建议走 `test-network/addOrg3` 标准流程）。
-- [ ] 部署链码时带上 `-ccep` 与 `-cccg` 参数。
-
----
-
-## 3. 工作包分解（按顺序执行）
-
-## WP-A：3 Org 网络搭建
-
-- [x] A1. 新增 `scripts/stage3_setup_network.sh`，内容包含：
-1. `./network.sh down`
-2. `./network.sh up createChannel -c mychannel -ca`
-3. `cd addOrg3 && ./addOrg3.sh up -c mychannel -ca`
-4. 返回仓库并输出 Org3 peer 健康检查命令。
-
-- [x] A2. 脚本末尾自动验证 Org3 是否入通道：
-1. `CORE_PEER_LOCALMSPID=Org3MSP` 环境下执行 `peer channel getinfo -c mychannel`
-2. 成功即输出 `Org3 joined mychannel`
-
-- [x] A3. 失败回滚策略：
-1. 任何步骤失败时打印命令与 stderr
-2. 给出 `./network.sh down` 清理提示
-
-验收：
-- [ ] `docker ps` 能看到 Org3 相关容器
-- [ ] Org3 peer 可查询 channel info
-
-## WP-B：链码级背书策略与部署
-
-- [x] B1. 部署命令统一为：
-
-```bash
-./network.sh deployCC \
-  -ccn evidence \
-  -ccp /ABS/PATH/CCTV-W-FABRIC-main/chaincode \
-  -ccl go \
-  -ccep "AND('Org1MSP.peer','Org2MSP.peer')" \
-  -cccg /ABS/PATH/CCTV-W-FABRIC-main/chaincode/collections_config.json
-```
-
-- [x] B2. 在 `scripts/stage3_verify.sh` 内加入“单背书失败 + 双背书成功”检查。
-
-验收：
-- [ ] Org1 单 peer 发起 invoke 提交失败（`ENDORSEMENT_POLICY_FAILURE`）
-- [ ] Org1+Org2 双 peer 发起 invoke 提交成功（`status VALID`）
-
-## WP-C：设备身份与签名链路
-
-### C1. 设备证书发放
-
-- [ ] C1-1. 使用 Org1 CA 为每台摄像头注册/签发身份（命名：`device-<cameraId>`）。
-- [x] C1-2. 约定证书目录：`device_keys/<cameraId>/{cert.pem,key.pem}`（不提交 Git）。
-- [x] C1-3. 在 `.env.example` 增加：
-1. `DEVICE_CERT_PATH`
-2. `DEVICE_KEY_PATH`
-3. `DEVICE_SIGN_ALGO=ECDSA_SHA256`
-
-### C2. 签名规范（必须固定）
-
-- [x] C2-1. 定义待签名消息（canonical JSON，键排序、无空白）：
-1. `batchId`
-2. `cameraId`
-3. `merkleRoot`
-4. `windowStart`
-5. `windowEnd`
-6. `eventIds`
-7. `eventHashes`
-
-- [x] C2-2. Python 端签名输出：
-1. `payloadHash`（hex）
-2. `signature`（base64, ASN.1 DER）
-3. `deviceCertPem`（PEM 字符串）
-
-- [x] C2-3. `CreateEvidenceBatch` 扩展参数：
-1. `deviceCertPEM`
-2. `signatureB64`
-3. `payloadHashHex`
-
-### C3. 链码验签
-
-- [x] C3-1. `chaincode.go` 新增 `VerifyDeviceSignature(...)`：
-1. 解析 PEM 证书与 ECDSA 公钥
-2. 验证 `signatureB64` 对 `payloadHash` 的签名
-3. 校验证书归属 Org1（MSP/Issuer 约束）
-
-- [x] C3-2. `CreateEvidenceBatch` 写入前强制调用验签，失败直接返回错误。
-
-验收：
-- [x] 正确签名可上链
-- [x] 篡改 `eventHashes` 或签名后上链失败
-
-## WP-D：整改流程（RectificationWorkflow）
-
-- [x] D1. 在链码增加结构 `RectificationOrder`：
-1. `orderId`
-2. `batchId`
-3. `createdBy`
-4. `assignedTo`
-5. `status`（OPEN/SUBMITTED/CONFIRMED/REJECTED）
-6. `deadline`
-7. `attachments`
-8. `timestamps`
-
-- [x] D2. 增加方法：
-1. `CreateRectificationOrder`（监管方创建）
-2. `SubmitRectification`（施工方提交）
-3. `ConfirmRectification`（监管方确认）
-
-- [x] D3. 上述写方法均受链码级 AND 背书策略保护。
-
-验收：
-- [x] 工单生命周期可完整流转
-- [x] 非法状态跳转被拒绝
-
-## WP-E：PDC 与访问控制
-
-### E1. Private Data Collection
-
-- [x] E1-1. 新增 `chaincode/collections_config.json`：
-1. `name`: `collectionRawEvidence`
-2. `policy`: `OR('Org1MSP.member','Org2MSP.member')`
-3. `memberOnlyRead`: `true`
-4. `memberOnlyWrite`: `true`
-
-- [x] E1-2. 链码新增：
-1. `PutRawEvidencePrivate(eventId, imageBase64, mimeType, imageSha256)`
-2. `GetRawEvidencePrivate(eventId)`（仅 Org1/Org2）
-3. `GetRawEvidenceHash(eventId)`（所有 org 可查）
-
-### E2. 方法级 ACL（链码内）
-
-- [x] E2-1. 新增 `requireMSP(ctx, allowedMSPs...)` 辅助函数。
-- [x] E2-2. 方法权限表：
-1. Org1/Org2：`CreateEvidence*`, `CreateRectification*`, `ConfirmRectification*`, `PutRawEvidencePrivate`
-2. Org3：`VerifyEvent`, `ExportAuditTrail`, `GetRawEvidenceHash`
-3. Org3 禁止写接口（返回 `permission denied for MSP`）
-
-验收：
-- [x] Org3 调用写接口被拒绝
-- [x] Org3 能调用审计/验真接口
-- [x] Org3 读取私有原图失败，但可读私有哈希
-
-## WP-F：审计导出（AccessControl / Audit）
-
-- [x] F1. 新增 `ExportAuditTrail(batchID)`：
-1. 汇总 `MerkleBatch`
-2. 汇总 member events
-3. 汇总 rectification history（若存在）
-4. 输出审计 JSON（不含私有原图）
-
-- [x] F2. Web 或脚本侧新增审计导出入口（Org3 身份）。
-
-验收：
-- [ ] Org3 可导出完整审计报告
-- [ ] 导出内容不泄露 PDC 原图
+### 1.4 超期工单查询接口
+- **路径**: `GET /api/workorder/overdue`
+- **功能**: 查询所有超期未完成的工单
+- **查询参数**:
+  - `org`: 可选，按组织筛选
+  - `page`: 分页参数
+  - `limit`: 每页数量
+- **实现要点**:
+  - 调用链码 `QueryOverdueWorkOrders` 方法
+  - 返回工单列表及超期天数
+  - 支持分页和排序
 
 ---
 
-## 4. 测试计划（必须自动化 + 手工）
+## 2. Web UI 工单管理页面
 
-## 4.1 Go 单元测试（chaincode）
+### 2.1 工单列表页面
+- **功能模块**:
+  - 工单列表展示（表格形式）
+  - 状态筛选器（全部/待整改/待确认/已关闭/已超期）
+  - 搜索功能（按工单 ID、违规 ID）
+  - 分页控件
+- **显示字段**:
+  - 工单 ID
+  - 违规事件 ID
+  - 责任组织
+  - 当前状态
+  - 创建时间
+  - 截止时间
+  - 操作按钮（根据角色和状态动态显示）
 
-- [x] 新增/更新测试用例：
-1. `TestCreateEvidenceBatch_WithValidSignature_OK`
-2. `TestCreateEvidenceBatch_InvalidSignature_Fail`
-3. `TestACL_Org3CannotCreateEvidenceBatch`
-4. `TestACL_Org3CanVerifyEvent`
-5. `TestPutRawEvidencePrivate_Org1Org2Only`
-6. `TestRectificationWorkflow_StateTransition`
+### 2.2 工单详情页面
+- **信息展示**:
+  - 基本信息（ID、描述、责任方、截止时间）
+  - 关联违规事件详情
+  - 状态流转历史（时间轴展示）
+  - 整改证明（如已提交）
+  - 审核意见（如已确认）
+- **操作区域**:
+  - 提交整改按钮（责任方可见）
+  - 确认/驳回按钮（监管方可见）
+  - 导出工单报告
 
-执行：
+### 2.3 工单创建表单
+- **表单字段**:
+  - 违规事件选择（下拉列表，可搜索）
+  - 整改要求描述（富文本编辑器）
+  - 责任组织选择
+  - 截止日期选择器
+- **验证规则**:
+  - 必填字段校验
+  - 截止日期不能早于当前时间
+  - 违规事件不能重复创建工单
 
-```bash
-cd /Users/ngokzit/Documents/CCTV-W-FABRIC-main/chaincode
-GOCACHE=/tmp/go-build go test -v ./...
-```
-
-## 4.2 联调测试（Fabric）
-
-- [ ] Org1 单方 invoke 失败
-- [ ] Org1+Org2 invoke 成功
-- [ ] Org3 query `VerifyEvent` 成功
-- [ ] Org3 invoke `CreateEvidenceBatch` 被拒绝
-- [ ] PDC 可见性符合策略
+### 2.4 状态流转可视化
+- **流程图展示**:
+  ```
+  创建 → 待整改 → 待确认 → 已关闭
+                ↓          ↓
+              超期      驳回（回到待整改）
+  ```
+- **状态颜色标识**:
+  - 待整改：橙色
+  - 待确认：蓝色
+  - 已关闭：绿色
+  - 已超期：红色
 
 ---
 
-## 5. 里程碑与执行顺序（硬性）
+## 3. 角色切换演示
 
-- [ ] M0：完成 WP-A（3 Org 网络）并截图/日志留档
-- [ ] M1：完成 WP-B（背书策略部署）
-- [x] M2：完成 WP-C（设备签名 + 链码验签）
-- [x] M3：完成 WP-D（整改流程）
-- [x] M4：完成 WP-E（PDC + ACL）
-- [x] M5：完成 WP-F（审计导出）
-- [x] M6：完成测试计划并更新 README/FABRIC_RUNBOOK
+### 3.1 多角色登录支持
+- **角色定义**:
+  - Org1：监管方（可创建工单、确认整改）
+  - Org2：责任方 A（可提交整改、查看自己的工单）
+  - Org3：责任方 B（可提交整改、查看自己的工单）
+- **实现方式**:
+  - 登录页面提供组织选择下拉框
+  - 后端根据组织生成对应的 JWT Token
+  - Token 中包含组织身份和权限信息
 
-禁止跳步：未完成前一里程碑，不进入下一里程碑。
+### 3.2 权限控制展示
+- **页面级权限**:
+  - 监管方：可访问所有工单、创建工单、审计报告
+  - 责任方：仅可访问分配给自己的工单
+- **操作级权限**:
+  - 创建工单按钮：仅监管方可见
+  - 提交整改按钮：仅责任方且工单状态为"待整改"时可见
+  - 确认/驳回按钮：仅监管方且工单状态为"待确认"时可见
+- **数据级权限**:
+  - 责任方查询工单时，链码自动过滤只返回本组织相关工单
+  - 监管方可查看所有组织的工单
+
+### 3.3 角色切换演示功能
+- **快速切换**:
+  - 页面右上角显示当前登录角色
+  - 点击可弹出角色切换菜单
+  - 切换后页面自动刷新，展示对应权限的界面
+- **演示场景**:
+  - 场景 1：以 Org1 身份创建工单
+  - 场景 2：切换到 Org2，提交整改证明
+  - 场景 3：切换回 Org1，确认整改并关闭工单
 
 ---
 
-## 6. 风险与回退
+## 4. 审计报告导出 API
 
-- [ ] R1. 如果 Org3 加入通道失败，优先回退到 `network.sh down` 后重建。
-- [x] R2. 如果签名验签影响现有流量，保留开关 `DEVICE_SIGNATURE_REQUIRED`（默认 `true`，可临时 `false` 降级）。
-- [ ] R3. 如果 PDC 写入过大导致性能问题，改为“图片对象存储 + 仅密钥/引用入 PDC”。
+### 4.1 审计追踪导出接口
+- **路径**: `GET /api/audit/export`
+- **功能**: 导出可验证的审计报告
+- **查询参数**:
+  ```
+  startTime: timestamp (可选)
+  endTime: timestamp (可选)
+  entityType: string (可选，如 "workorder", "violation")
+  entityId: string (可选)
+  format: string (json/csv/pdf，默认 json)
+  ```
+- **实现要点**:
+  - 调用链码 `ExportAuditTrail` 方法
+  - 返回包含区块哈希和签名的审计记录
+  - 支持多种导出格式
+
+### 4.2 审计报告内容
+- **报告结构**:
+  ```json
+  {
+    "reportId": "string",
+    "generatedAt": "timestamp",
+    "generatedBy": "string",
+    "timeRange": {
+      "start": "timestamp",
+      "end": "timestamp"
+    },
+    "auditRecords": [
+      {
+        "timestamp": "timestamp",
+        "actor": "string",
+        "action": "string",
+        "entityType": "string",
+        "entityId": "string",
+        "changes": {},
+        "blockNumber": "number",
+        "txId": "string",
+        "blockHash": "string"
+      }
+    ],
+    "signature": "string",
+    "verificationInfo": {
+      "chaincodeName": "string",
+      "channelName": "string",
+      "networkId": "string"
+    }
+  }
+  ```
+
+### 4.3 报告验证功能
+- **验证接口**: `POST /api/audit/verify`
+- **功能**: 验证审计报告的真实性
+- **请求体**:
+  ```json
+  {
+    "reportId": "string",
+    "signature": "string"
+  }
+  ```
+- **验证步骤**:
+  1. 检查报告签名是否有效
+  2. 验证区块哈希是否匹配链上数据
+  3. 确认交易 ID 存在且未被篡改
+  4. 返回验证结果和可信度评分
+
+### 4.4 Web UI 审计报告页面
+- **功能模块**:
+  - 时间范围选择器
+  - 实体类型筛选
+  - 导出格式选择
+  - 报告预览（表格形式）
+  - 下载按钮
+  - 报告验证工具（上传报告文件进行验证）
 
 ---
 
-## 7. 完成后文档更新清单
+## 5. 违规事件自动触发工单
 
-- [x] 更新 `README.md`：新增 3 Org、签名、PDC、ACL 的部署与验收步骤。
-- [x] 更新 `FABRIC_RUNBOOK.md`：新增 Org3 环境变量模板与验证命令。
-- [x] 更新 `EXECUTE_INSTRUCTIONS.md`：新增阶段三最短执行路径。
-- [x] 更新 `CHANGELOG.md`：记录阶段三发布日期与破坏性变更。
+### 5.1 自动触发机制
+- **触发条件**:
+  - 违规事件成功上链
+  - 违规严重等级达到阈值（如 "高" 或 "严重"）
+  - 自动触发开关已启用
+- **实现方式**:
+  - 在违规事件上链成功后，后端监听链码事件
+  - 根据配置规则判断是否需要自动创建工单
+  - 调用 `CreateWorkOrder` 自动生成工单
+
+### 5.2 配置管理
+- **配置项**:
+  ```json
+  {
+    "autoCreateWorkOrder": true,
+    "triggerRules": [
+      {
+        "violationLevel": "high",
+        "autoAssignOrg": "Org2",
+        "defaultDeadlineDays": 7
+      },
+      {
+        "violationLevel": "critical",
+        "autoAssignOrg": "Org2",
+        "defaultDeadlineDays": 3
+      }
+    ],
+    "notificationEnabled": true,
+    "notificationChannels": ["email", "webhook"]
+  }
+  ```
+- **配置界面**:
+  - 开关控件（启用/禁用自动触发）
+  - 规则列表（可添加、编辑、删除）
+  - 通知设置（邮件、Webhook 地址）
+
+### 5.3 通知功能
+- **通知时机**:
+  - 工单自动创建时
+  - 工单即将超期时（提前 1 天）
+  - 工单已超期时
+  - 整改提交时
+  - 整改确认/驳回时
+- **通知方式**:
+  - 邮件通知（发送给责任方和监管方）
+  - Webhook 通知（集成第三方系统）
+  - Web UI 站内消息
+- **通知内容**:
+  - 工单基本信息
+  - 当前状态
+  - 操作链接（直接跳转到工单详情页）
+
+### 5.4 事件监听服务
+- **服务架构**:
+  - 独立的事件监听服务（Node.js/Go）
+  - 监听 Fabric 链码事件
+  - 解析事件数据并触发相应操作
+- **事件类型**:
+  - `ViolationCreated`：违规事件创建
+  - `WorkOrderCreated`：工单创建
+  - `WorkOrderUpdated`：工单状态更新
+  - `WorkOrderOverdue`：工单超期
+- **容错机制**:
+  - 事件重试机制（失败后重试 3 次）
+  - 事件日志记录（便于排查问题）
+  - 健康检查接口（监控服务状态）
+
+---
+
+## 实施顺序建议
+
+1. **第一步**：实现工单管理 REST API（1-2 天）
+2. **第二步**：开发 Web UI 工单管理页面（2-3 天）
+3. **第三步**：实现角色切换和权限控制（1-2 天）
+4. **第四步**：开发审计报告导出功能（1-2 天）
+5. **第五步**：实现违规事件自动触发工单（2-3 天）
+6. **第六步**：集成测试和演示准备（1-2 天）
+
+**总计**: 约 10-14 天
+
+---
+
+## 技术栈建议
+
+- **后端 API**: Node.js + Express / Go + Gin
+- **前端**: React + TypeScript + Ant Design / Vue 3 + Element Plus
+- **状态管理**: Redux / Pinia
+- **HTTP 客户端**: Axios
+- **Fabric SDK**: fabric-network (Node.js) / fabric-sdk-go
+- **事件监听**: fabric-network EventListener
+- **报告生成**: jsPDF (PDF) / json2csv (CSV)
+
+---
+
+## 测试要点
+
+- [ ] API 接口测试（Postman/Jest）
+- [ ] 权限控制测试（不同角色访问不同接口）
+- [ ] 工单状态流转测试（完整流程）
+- [ ] 超期工单告警测试
+- [ ] 审计报告导出和验证测试
+- [ ] 自动触发工单测试（模拟违规事件上链）
+- [ ] 并发测试（多个组织同时操作）
+- [ ] 前端 UI/UX 测试
+
+---
+
+## 交付物
+
+- [ ] 完整的 REST API 文档（Swagger/OpenAPI）
+- [ ] Web UI 用户操作手册
+- [ ] 角色权限矩阵文档
+- [ ] 审计报告样例和验证说明
+- [ ] 自动触发配置指南
+- [ ] 演示视频（展示完整业务流程）

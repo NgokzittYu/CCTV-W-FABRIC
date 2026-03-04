@@ -1,6 +1,61 @@
 # Changelog
 
-## 2026-03-04
+## 2026-03-04 (阶段四)
+
+### Added
+
+- 工单管理 REST API：
+  - `POST /api/workorder/create` - 创建整改工单（Org2）
+  - `POST /api/workorder/{order_id}/rectify` - 提交整改证明（Org1）
+  - `POST /api/workorder/{order_id}/confirm` - 确认/驳回整改（Org2）
+  - `GET /api/workorder/overdue` - 查询超期工单
+  - `GET /api/workorder/{order_id}` - 获取工单详情
+- Web UI 工单管理页面（`/workorder`）：
+  - 工单列表展示（表格、筛选、搜索）
+  - 工单详情模态框（完整信息、状态历史）
+  - 创建工单表单（违规ID、描述、责任方、截止日期）
+  - 提交整改模态框（整改证明、附件）
+  - 确认整改模态框（审核意见、通过/驳回）
+  - 状态可视化（颜色标识：待整改/待确认/已关闭/已驳回）
+  - 超期工单自动标记
+- 角色切换和权限控制：
+  - 三组织角色选择器（Org1/Org2/Org3）
+  - 基于角色的动态权限控制
+  - 角色持久化（localStorage）
+  - 角色切换通知提示
+- 审计报告导出和验证（`/audit`）：
+  - `GET /api/audit/export` - 导出审计报告
+  - 报告预览功能（批次信息、事件列表、工单列表）
+  - JSON 格式导出（可下载）
+  - 报告签名生成和验证
+- 违规事件自动触发工单机制：
+  - 自动触发逻辑（批次事件 ≥5 自动创建工单）
+  - 系统配置页面（`/config`）
+  - 启用/禁用开关
+  - 触发规则管理（违规等级、责任组织、截止天数）
+  - `GET /api/config/auto-workorder` - 获取配置
+  - `POST /api/config/auto-workorder` - 更新配置
+- 新增页面路由：
+  - `/workorder` - 工单管理
+  - `/audit` - 审计报告
+  - `/config` - 系统配置
+- 文档：
+  - `PHASE4_SUMMARY.md` - 阶段四完整实施总结
+  - `QUICKSTART_PHASE4.md` - 快速启动指南
+
+### Changed
+
+- 主页导航栏添加角色选择器和页面链接
+- 工单管理页面根据角色动态显示操作按钮
+- 批次锚定成功后自动触发工单创建（可配置）
+
+### Notes
+
+- 工单操作需要 2-3 秒链码响应时间
+- 前端权限控制为 UI 层，真正权限由链码强制执行
+- 自动触发工单默认启用，可在配置页面关闭
+
+## 2026-03-04 (阶段三)
 
 ### Added
 

@@ -43,6 +43,21 @@ AGGREGATE_WINDOW_SECONDS = SETTINGS.aggregate_window_seconds
 MERKLE_BATCH_WINDOW_SECONDS = SETTINGS.merkle_batch_window_seconds
 MERKLE_FLUSH_POLL_SECONDS = SETTINGS.merkle_flush_poll_seconds
 
+# Auto workorder trigger config
+AUTO_CREATE_WORKORDER = True  # Enable/disable auto workorder creation
+WORKORDER_TRIGGER_RULES = [
+    {
+        "violation_level": "high",
+        "auto_assign_org": "Org1MSP",
+        "default_deadline_days": 7
+    },
+    {
+        "violation_level": "critical",
+        "auto_assign_org": "Org1MSP",
+        "default_deadline_days": 3
+    }
+]
+
 CONFIDENCE_THRESHOLD = SETTINGS.confidence_threshold
 # COCO class ids: person, bicycle, car, motorcycle, bus, truck
 ROAD_TARGET_CLASS_IDS = SETTINGS.road_target_class_ids
@@ -715,6 +730,14 @@ class MerkleBatchManager:
             )
             manifest["payload_hash"] = payload_hash_hex
             manifest["signature_alg"] = DEVICE_SIGN_ALGO
+
+            # Auto-trigger workorder if enabled
+            if len(batch_events) >= 5:  # Trigger if 5+ events in batch
+                threading.Thread(
+                    target=auto_trigger_workorder,
+                    args=(batch_id, len(batch_events), "high"),
+                    daemon=True
+                ).start()
         except Exception as e:
             status = "Failed"
             error_msg = str(e)
@@ -777,6 +800,63 @@ class MerkleBatchManager:
 
 
 batch_manager = MerkleBatchManager(MERKLE_BATCH_WINDOW_SECONDS)
+
+
+def auto_trigger_workorder(batch_id: str, event_count: int, violation_level: str = "high"):
+    """Automatically create workorder for violation events"""
+    if not AUTO_CREATE_WORKORDER:
+        return
+
+    # Find matching rule
+    rule = None
+    for r in WORKORDER_TRIGGER_RULES:
+        if r["violation_level"] == violation_level:
+            rule = r
+            break
+
+    if not rule:
+        print(f"[AUTO-WORKORDER] No rule found for violation level: {violation_level}")
+        return
+
+    try:
+        order_id = f"order_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        deadline = int(time.time()) + (rule["default_deadline_days"] * 24 * 3600)
+        description = f"自动创建：检测到 {event_count} 个违规事件，批次 {batch_id}，需要整改"
+
+        # Use Org2 identity to create workorder (only Org2 has permission)
+        env, orderer_ca, org2_tls = get_fabric_config()
+
+        # Save Org1 TLS cert path before overriding
+        org1_tls_cert = env["CORE_PEER_TLS_ROOTCERT_FILE"]
+
+        # Override to use Org2 MSP identity
+        org2_path = FABRIC_SAMPLES_PATH / "test-network" / "organizations" / "peerOrganizations" / "org2.example.com"
+        env["CORE_PEER_LOCALMSPID"] = "Org2MSP"
+        env["CORE_PEER_ADDRESS"] = "localhost:9051"
+        env["CORE_PEER_TLS_ROOTCERT_FILE"] = org1_tls_cert  # Keep Org1 cert for peer connection
+        env["CORE_PEER_MSPCONFIGPATH"] = str(org2_path / "users" / "Admin@org2.example.com" / "msp")
+
+        args = [
+            order_id,
+            batch_id,
+            rule["auto_assign_org"],
+            str(deadline),
+            description
+        ]
+
+        invoke_chaincode(
+            env,
+            orderer_ca,
+            org2_tls,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "CreateRectificationOrder",
+            args,
+        )
+
+        print(f"[AUTO-WORKORDER] Created workorder {order_id} for batch {batch_id}")
+    except Exception as e:
+        print(f"[AUTO-WORKORDER] Failed to create workorder: {e}")
 
 
 def process_event_worker(event_data: Dict[str, Any], frame_bytes: Optional[bytes]):
@@ -885,6 +965,21 @@ t.start()
 @app.get("/")
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/workorder")
+def workorder_page(request: Request):
+    return templates.TemplateResponse("workorder.html", {"request": request})
+
+
+@app.get("/audit")
+def audit_page(request: Request):
+    return templates.TemplateResponse("audit.html", {"request": request})
+
+
+@app.get("/config")
+def config_page(request: Request):
+    return templates.TemplateResponse("config.html", {"request": request})
 
 
 def gen_frames(capture_type="raw"):
@@ -1027,5 +1122,276 @@ async def get_history_for_key(event_id: str):
                 }
             )
         return {"status": "success", "history": normalized}
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+# ==================== Workorder Management APIs ====================
+
+@app.post("/api/workorder/create")
+async def create_workorder(request: Request):
+    """Create a new rectification workorder (Org2 only)"""
+    try:
+        body = await request.json()
+        violation_id = body.get("violationId", "").strip()
+        description = body.get("description", "").strip()
+        assigned_org = body.get("assignedOrg", "").strip()
+        deadline = body.get("deadline", 0)
+
+        if not violation_id or not assigned_org:
+            return JSONResponse(
+                {"status": "error", "message": "violationId and assignedOrg are required"},
+                status_code=400
+            )
+
+        order_id = f"order_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
+        # Use Org2 identity to create workorder (only Org2 has permission)
+        env, orderer_ca, org2_tls = get_fabric_config()
+
+        # Save Org1 TLS cert path before overriding
+        org1_tls_cert = env["CORE_PEER_TLS_ROOTCERT_FILE"]
+
+        # Override to use Org2 MSP identity
+        org2_path = FABRIC_SAMPLES_PATH / "test-network" / "organizations" / "peerOrganizations" / "org2.example.com"
+        env["CORE_PEER_LOCALMSPID"] = "Org2MSP"
+        env["CORE_PEER_ADDRESS"] = "localhost:9051"
+        env["CORE_PEER_TLS_ROOTCERT_FILE"] = org1_tls_cert  # Keep Org1 cert for peer connection
+        env["CORE_PEER_MSPCONFIGPATH"] = str(org2_path / "users" / "Admin@org2.example.com" / "msp")
+
+        args = [order_id, violation_id, assigned_org, str(deadline), description]
+
+        invoke_res = invoke_chaincode(
+            env,
+            orderer_ca,
+            org2_tls,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "CreateRectificationOrder",
+            args,
+        )
+
+        return {
+            "status": "success",
+            "orderId": order_id,
+            "txId": invoke_res.get("tx_id", ""),
+            "message": "Workorder created successfully"
+        }
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/workorder/{order_id}/rectify")
+async def submit_rectification(order_id: str, request: Request):
+    """Submit rectification proof (Org1 only)"""
+    try:
+        body = await request.json()
+        rectification_proof = body.get("rectificationProof", "").strip()
+        attachments = body.get("attachments", [])
+
+        if not rectification_proof:
+            return JSONResponse(
+                {"status": "error", "message": "rectificationProof is required"},
+                status_code=400
+            )
+
+        attachment_url = ",".join(attachments) if attachments else rectification_proof
+
+        env, orderer_ca, org2_tls = get_fabric_config()
+        args = [order_id, attachment_url, rectification_proof]
+
+        invoke_res = invoke_chaincode(
+            env,
+            orderer_ca,
+            org2_tls,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "SubmitRectification",
+            args,
+        )
+
+        return {
+            "status": "success",
+            "orderId": order_id,
+            "txId": invoke_res.get("tx_id", ""),
+            "message": "Rectification submitted successfully"
+        }
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/api/workorder/{order_id}/confirm")
+async def confirm_workorder(order_id: str, request: Request):
+    """Confirm or reject rectification (Org2 only)"""
+    try:
+        body = await request.json()
+        approved = body.get("approved", False)
+        comments = body.get("comments", "").strip()
+
+        # Use Org2 identity to confirm workorder (only Org2 has permission)
+        env, orderer_ca, org2_tls = get_fabric_config()
+
+        # Save Org1 TLS cert path before overriding
+        org1_tls_cert = env["CORE_PEER_TLS_ROOTCERT_FILE"]
+
+        # Override to use Org2 MSP identity
+        org2_path = FABRIC_SAMPLES_PATH / "test-network" / "organizations" / "peerOrganizations" / "org2.example.com"
+        env["CORE_PEER_LOCALMSPID"] = "Org2MSP"
+        env["CORE_PEER_ADDRESS"] = "localhost:9051"
+        env["CORE_PEER_TLS_ROOTCERT_FILE"] = org1_tls_cert  # Keep Org1 cert for peer connection
+        env["CORE_PEER_MSPCONFIGPATH"] = str(org2_path / "users" / "Admin@org2.example.com" / "msp")
+
+        args = [order_id, str(approved).lower(), comments]
+
+        invoke_res = invoke_chaincode(
+            env,
+            orderer_ca,
+            org2_tls,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "ConfirmRectification",
+            args,
+        )
+
+        return {
+            "status": "success",
+            "orderId": order_id,
+            "approved": approved,
+            "txId": invoke_res.get("tx_id", ""),
+            "message": f"Workorder {'approved' if approved else 'rejected'} successfully"
+        }
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/api/workorder/overdue")
+async def query_overdue_workorders(org: Optional[str] = None, page: int = 1, limit: int = 20):
+    """Query overdue workorders"""
+    try:
+        # Query all rectification orders from chaincode
+        # Note: This requires a new chaincode function QueryOverdueWorkOrders
+        # For now, we'll return a placeholder response
+        return {
+            "status": "success",
+            "message": "Overdue workorder query not yet implemented in chaincode",
+            "data": [],
+            "page": page,
+            "limit": limit,
+            "total": 0
+        }
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/api/workorder/{order_id}")
+async def get_workorder_detail(order_id: str):
+    """Get workorder details"""
+    try:
+        order_data = query_chaincode("ReadRectificationOrder", [order_id])
+
+        if not order_data:
+            return JSONResponse(
+                {"status": "error", "message": "Workorder not found"},
+                status_code=404
+            )
+
+        # Calculate if overdue
+        deadline = order_data.get("deadline", 0)
+        current_time = int(time.time())
+        is_overdue = deadline > 0 and current_time > deadline and order_data.get("status") == "OPEN"
+
+        return {
+            "status": "success",
+            "data": {
+                **order_data,
+                "isOverdue": is_overdue,
+                "overdueBy": max(0, current_time - deadline) if is_overdue else 0
+            }
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower():
+            return JSONResponse({"status": "error", "message": "Workorder not found"}, status_code=404)
+        return JSONResponse({"status": "error", "message": error_msg}, status_code=500)
+
+
+@app.get("/api/audit/export")
+async def export_audit_trail(
+    batch_id: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    format: str = "json"
+):
+    """Export audit trail for a batch"""
+    try:
+        if not batch_id:
+            return JSONResponse(
+                {"status": "error", "message": "batch_id is required"},
+                status_code=400
+            )
+
+        audit_data = query_chaincode("ExportAuditTrail", [batch_id], timeout=30)
+
+        if not audit_data:
+            return JSONResponse(
+                {"status": "error", "message": "Audit trail not found"},
+                status_code=404
+            )
+
+        # Add report metadata
+        report = {
+            "reportId": f"audit_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+            "generatedAt": int(time.time()),
+            "generatedBy": "system",
+            "batchId": batch_id,
+            "auditData": audit_data,
+            "signature": hashlib.sha256(json.dumps(audit_data, sort_keys=True).encode()).hexdigest()
+        }
+
+        if format == "json":
+            return report
+        else:
+            return JSONResponse(
+                {"status": "error", "message": f"Format {format} not yet supported"},
+                status_code=400
+            )
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/api/config/auto-workorder")
+async def get_auto_workorder_config():
+    """Get auto workorder configuration"""
+    return {
+        "status": "success",
+        "config": {
+            "enabled": AUTO_CREATE_WORKORDER,
+            "rules": WORKORDER_TRIGGER_RULES
+        }
+    }
+
+
+@app.post("/api/config/auto-workorder")
+async def update_auto_workorder_config(request: Request):
+    """Update auto workorder configuration"""
+    global AUTO_CREATE_WORKORDER, WORKORDER_TRIGGER_RULES
+
+    try:
+        body = await request.json()
+
+        if "enabled" in body:
+            AUTO_CREATE_WORKORDER = bool(body["enabled"])
+
+        if "rules" in body:
+            WORKORDER_TRIGGER_RULES = body["rules"]
+
+        return {
+            "status": "success",
+            "message": "Configuration updated successfully",
+            "config": {
+                "enabled": AUTO_CREATE_WORKORDER,
+                "rules": WORKORDER_TRIGGER_RULES
+            }
+        }
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
