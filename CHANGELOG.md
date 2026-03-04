@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-03-04 (代码工程化重构)
+
+### Added
+- 新增 `services/` 模块目录，实现职责分离：
+  - `services/merkle_utils.py` - Merkle Tree 构建和验证 (~60 行)
+  - `services/crypto_utils.py` - 加密哈希和设备签名 (~120 行)
+  - `services/fabric_client.py` - Fabric 链码交互封装 (~170 行)
+  - `services/event_aggregator.py` - 事件聚合引擎 (~230 行)
+  - `services/detection_service.py` - 检测循环和视频流 (~270 行)
+  - `services/workorder_service.py` - 工单和审计业务逻辑 (~220 行)
+- 新增测试目录 `tests/`：
+  - `test_merkle_utils.py` - Merkle 工具测试
+  - `test_crypto_utils.py` - 加密工具测试
+  - `test_event_aggregator.py` - 事件聚合测试
+
+### Changed
+- `web_app.py` 重构：从 1399 行精简到 330 行
+  - 移除所有重复的工具函数
+  - 只保留路由定义和启动逻辑
+  - 所有业务逻辑调用 services 模块
+- `anchor_to_fabric.py` 重构：从 837 行精简
+  - 移除 6 类重复函数（Merkle、加密、签名、Fabric 交互等）
+  - 统一使用 services 模块
+
+### Fixed
+- **FastAPI 异步请求处理错误** (`web_app.py`)
+  - `api_create_workorder()` 改为 `async def`，使用 `await request.json()`
+  - `api_submit_rectification()` 改为 `async def`，使用 `await request.json()`
+  - `api_confirm_rectification()` 改为 `async def`，使用 `await request.json()`
+- **缺失导入** (`web_app.py`)
+  - 添加 `from services.merkle_utils import apply_merkle_proof`
+  - 添加 `from services.workorder_service import export_audit_trail`
+- **语法错误** (`services/workorder_service.py:147`)
+  - 修复 `.res()` → `.resolve()`
+- **缺失方法** (`services/event_aggregator.py`)
+  - 添加 `update(boxes, class_names)` 方法处理 YOLO 检测结果
+- **未使用的导入清理** (`web_app.py`)
+  - 移除 `datetime`, `time`, `Any` 等未使用导入
+
+### Optimized
+- 消除代码重复：`web_app.py` 和 `anchor_to_fabric.py` 之间的重复函数
+- 代码总行数从 ~3600 行减少到 ~2000 行 (减少 44%)
+- 模块职责更清晰，符合单一职责原则
+- 提高代码复用性和可维护性
+
 ## 2026-03-04 (阶段四)
 
 ### Added

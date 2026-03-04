@@ -3,10 +3,6 @@ import argparse
 import base64
 import hashlib
 import json
-import os
-import re
-import subprocess
-import tempfile
 import time
 import uuid
 from collections import Counter
@@ -15,17 +11,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import SETTINGS
-
-
-def run(cmd: List[str], env: Optional[Dict[str, str]] = None, check: bool = True):
-    proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
-    if check and proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}"
-        )
-    return proc
+from services.crypto_utils import compute_evidence_hash as compute_hash_from_bytes, normalize_event_json_payload
+from services.fabric_client import (
+    build_fabric_env,
+    evidence_exists,
+    get_latest_block_number,
+    invoke_chaincode,
+    query_chaincode,
+    run,
+)
+from services.merkle_utils import build_merkle_root_and_proofs, sha256_digest
+from services.crypto_utils import build_batch_signature_material
 
 
 @dataclass
@@ -39,31 +35,11 @@ class EvidenceItem:
     image_path: Path
 
 
-def _normalize_event_json_payload(raw_bytes: bytes) -> bytes:
-    try:
-        data = json.loads(raw_bytes.decode("utf-8"))
-        if isinstance(data, dict):
-            data = dict(data)
-            data.pop("_anchor", None)
-            data.pop("_merkle", None)
-            data.pop("evidence_hash", None)
-            data.pop("evidence_hash_list", None)
-        return json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-    except Exception:
-        return raw_bytes
-
-
 def compute_evidence_hash(json_path: Path, image_path: Path) -> str:
     """Computes SHA256 of evidence content, excluding local anchor metadata."""
-    sha256 = hashlib.sha256()
-
     json_bytes = json_path.read_bytes()
-    sha256.update(_normalize_event_json_payload(json_bytes))
-
-    if image_path.exists():
-        sha256.update(image_path.read_bytes())
-
-    return sha256.hexdigest()
+    img_bytes = image_path.read_bytes() if image_path.exists() else None
+    return compute_hash_from_bytes(json_bytes, img_bytes)
 
 
 def parse_event_item(json_path: Path, camera_id: str) -> EvidenceItem:
@@ -98,166 +74,6 @@ def parse_event_item(json_path: Path, camera_id: str) -> EvidenceItem:
         json_path=json_path,
         image_path=image_path,
     )
-
-
-def build_fabric_env(fabric_samples: Path) -> Tuple[Dict[str, str], Path, Path]:
-    env = os.environ.copy()
-    env["PATH"] = f"{fabric_samples / 'bin'}:{env.get('PATH', '')}"
-    env["FABRIC_CFG_PATH"] = str(fabric_samples / "config")
-
-    env["CORE_PEER_TLS_ENABLED"] = SETTINGS.core_peer_tls_enabled
-    env["CORE_PEER_LOCALMSPID"] = SETTINGS.core_peer_local_mspid
-    env["CORE_PEER_ADDRESS"] = SETTINGS.core_peer_address
-
-    org1 = (
-        fabric_samples
-        / "test-network"
-        / "organizations"
-        / "peerOrganizations"
-        / SETTINGS.org1_domain
-    )
-    env["CORE_PEER_TLS_ROOTCERT_FILE"] = str(
-        org1 / "peers" / f"peer0.{SETTINGS.org1_domain}" / "tls" / "ca.crt"
-    )
-    env["CORE_PEER_MSPCONFIGPATH"] = str(
-        org1 / "users" / f"Admin@{SETTINGS.org1_domain}" / "msp"
-    )
-
-    orderer_ca = (
-        fabric_samples
-        / "test-network"
-        / "organizations"
-        / "ordererOrganizations"
-        / SETTINGS.orderer_org_domain
-        / "orderers"
-        / SETTINGS.orderer_domain
-        / "msp"
-        / "tlscacerts"
-        / f"tlsca.{SETTINGS.orderer_org_domain}-cert.pem"
-    )
-    org2_tls = (
-        fabric_samples
-        / "test-network"
-        / "organizations"
-        / "peerOrganizations"
-        / SETTINGS.org2_domain
-        / "peers"
-        / f"peer0.{SETTINGS.org2_domain}"
-        / "tls"
-        / "ca.crt"
-    )
-
-    return env, orderer_ca, org2_tls
-
-
-def evidence_exists(env: Dict[str, str], channel: str, chaincode: str, evidence_id: str) -> bool:
-    cmd = [
-        "peer",
-        "chaincode",
-        "query",
-        "-C",
-        channel,
-        "-n",
-        chaincode,
-        "-c",
-        json.dumps({"function": "EvidenceExists", "Args": [evidence_id]}),
-    ]
-    proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
-    if proc.returncode == 0:
-        return "true" in proc.stdout.lower()
-    return False
-
-
-def query_chaincode(
-    env: Dict[str, str],
-    channel: str,
-    chaincode: str,
-    function_name: str,
-    args: List[str],
-) -> str:
-    cmd = [
-        "peer",
-        "chaincode",
-        "query",
-        "-C",
-        channel,
-        "-n",
-        chaincode,
-        "-c",
-        json.dumps({"function": function_name, "Args": args}, ensure_ascii=False),
-    ]
-    proc = run(cmd, env=env, check=True)
-    return (proc.stdout or "").strip()
-
-
-def _encode_transient_map(transient_map: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not transient_map:
-        return None
-    encoded: Dict[str, str] = {}
-    for key, value in transient_map.items():
-        if isinstance(value, bytes):
-            raw = value
-        elif isinstance(value, str):
-            raw = value.encode("utf-8")
-        else:
-            raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        encoded[key] = base64.b64encode(raw).decode("ascii")
-    return json.dumps(encoded, ensure_ascii=False, separators=(",", ":"))
-
-
-def invoke_chaincode(
-    env: Dict[str, str],
-    orderer_ca: Path,
-    org2_tls: Path,
-    channel: str,
-    chaincode: str,
-    function_name: str,
-    args: List[str],
-    transient_map: Optional[Dict[str, Any]] = None,
-) -> Dict[str, str]:
-    payload = json.dumps({"function": function_name, "Args": args}, ensure_ascii=False)
-    cmd = [
-        "peer",
-        "chaincode",
-        "invoke",
-        "-o",
-        SETTINGS.orderer_address,
-        "--ordererTLSHostnameOverride",
-        SETTINGS.orderer_tls_hostname_override,
-        "--tls",
-        "--cafile",
-        str(orderer_ca),
-        "-C",
-        channel,
-        "-n",
-        chaincode,
-        "--peerAddresses",
-        SETTINGS.org1_peer_address,
-        "--tlsRootCertFiles",
-        env["CORE_PEER_TLS_ROOTCERT_FILE"],
-        "--peerAddresses",
-        SETTINGS.org2_peer_address,
-        "--tlsRootCertFiles",
-        str(org2_tls),
-        "--waitForEvent",
-        "--waitForEventTimeout",
-        "30s",
-        "-c",
-        payload,
-    ]
-
-    transient_json = _encode_transient_map(transient_map)
-    if transient_json:
-        cmd.extend(["--transient", transient_json])
-
-    proc = run(cmd, env=env, check=True)
-
-    tx_id = ""
-    tx_match = re.search(r"txid \[([0-9a-fA-F]+)\]", proc.stderr or "")
-    if tx_match:
-        tx_id = tx_match.group(1)
-
-    return {"tx_id": tx_id, "stdout": proc.stdout, "stderr": proc.stderr}
 
 
 def invoke_create_evidence(
@@ -352,178 +168,6 @@ def invoke_put_private_evidence(
         args,
         transient_map=transient_map,
     )
-
-
-def get_latest_block_number(env: Dict[str, str], channel: str) -> Optional[int]:
-    cmd = ["peer", "channel", "getinfo", "-c", channel]
-    proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
-    if proc.returncode != 0:
-        return None
-
-    out = (proc.stdout or "").strip()
-    if "Blockchain info:" not in out:
-        return None
-    try:
-        payload = out.split("Blockchain info:", 1)[1].strip()
-        info = json.loads(payload)
-        height = int(info.get("height", 0))
-        if height <= 0:
-            return None
-        return height - 1
-    except Exception:
-        return None
-
-
-def build_batch_signature_payload(
-    batch_id: str,
-    camera_id: str,
-    merkle_root: str,
-    window_start: int,
-    window_end: int,
-    event_ids: List[str],
-    event_hashes: List[str],
-) -> bytes:
-    payload = {
-        "batchId": batch_id,
-        "cameraId": camera_id,
-        "merkleRoot": merkle_root,
-        "windowStart": int(window_start),
-        "windowEnd": int(window_end),
-        "eventIds": event_ids,
-        "eventHashes": event_hashes,
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _auto_generate_device_material(camera_id: str) -> Tuple[Path, Path]:
-    base_dir = Path(tempfile.gettempdir()) / "cctv_device_autogen"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    key_path = base_dir / f"{camera_id}.key.pem"
-    cert_path = base_dir / f"{camera_id}.cert.pem"
-    if key_path.exists() and cert_path.exists():
-        return cert_path, key_path
-
-    subj = f"/CN=device-{camera_id}@org1.example.com/O=Org1"
-    cmd = [
-        "openssl",
-        "req",
-        "-x509",
-        "-newkey",
-        "ec",
-        "-pkeyopt",
-        "ec_paramgen_curve:P-256",
-        "-nodes",
-        "-keyout",
-        str(key_path),
-        "-out",
-        str(cert_path),
-        "-days",
-        "365",
-        "-subj",
-        subj,
-    ]
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or "failed to auto-generate device key/cert")
-    return cert_path, key_path
-
-
-def sign_payload_with_device_key(payload_bytes: bytes, key_path: Path, sign_algo: str) -> str:
-    if sign_algo != "ECDSA_SHA256":
-        raise RuntimeError(f"unsupported DEVICE_SIGN_ALGO: {sign_algo}")
-    with tempfile.NamedTemporaryFile("wb", delete=False) as f:
-        f.write(payload_bytes)
-        payload_path = Path(f.name)
-    try:
-        cmd = ["openssl", "dgst", "-sha256", "-sign", str(key_path), "-binary", str(payload_path)]
-        proc = subprocess.run(cmd, capture_output=True)
-        if proc.returncode != 0:
-            stderr = (proc.stderr or b"").decode("utf-8", errors="ignore").strip()
-            raise RuntimeError(stderr or "openssl sign failed")
-        return base64.b64encode(proc.stdout).decode("ascii")
-    finally:
-        try:
-            payload_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
-def build_batch_signature_material(
-    batch_id: str,
-    camera_id: str,
-    merkle_root: str,
-    window_start: int,
-    window_end: int,
-    event_ids: List[str],
-    event_hashes: List[str],
-    device_cert_path: Path,
-    device_key_path: Path,
-    sign_algo: str,
-    signature_required: bool,
-) -> Tuple[str, str, str]:
-    payload_bytes = build_batch_signature_payload(
-        batch_id,
-        camera_id,
-        merkle_root,
-        int(window_start),
-        int(window_end),
-        event_ids,
-        event_hashes,
-    )
-    payload_hash = hashlib.sha256(payload_bytes).hexdigest()
-
-    cert_path = device_cert_path
-    key_path = device_key_path
-    if not cert_path.exists() or not key_path.exists():
-        if signature_required:
-            raise RuntimeError(
-                f"device cert/key not found: cert={cert_path}, key={key_path}; "
-                "set DEVICE_CERT_PATH and DEVICE_KEY_PATH"
-            )
-        cert_path, key_path = _auto_generate_device_material(camera_id)
-
-    cert_pem = cert_path.read_text(encoding="utf-8").strip()
-    signature_b64 = sign_payload_with_device_key(payload_bytes, key_path, sign_algo)
-    return cert_pem, signature_b64, payload_hash
-
-
-def sha256_digest(data: bytes) -> bytes:
-    return hashlib.sha256(data).digest()
-
-
-def build_merkle_root_and_proofs(leaf_hashes: List[str]) -> Tuple[str, List[List[Dict[str, str]]]]:
-    if not leaf_hashes:
-        raise ValueError("leaf_hashes cannot be empty")
-
-    levels: List[List[bytes]] = [[bytes.fromhex(h) for h in leaf_hashes]]
-
-    while len(levels[-1]) > 1:
-        current = levels[-1]
-        nxt: List[bytes] = []
-        for i in range(0, len(current), 2):
-            left = current[i]
-            right = current[i + 1] if i + 1 < len(current) else current[i]
-            nxt.append(sha256_digest(left + right))
-        levels.append(nxt)
-
-    root = levels[-1][0].hex()
-
-    proofs: List[List[Dict[str, str]]] = []
-    for leaf_idx in range(len(leaf_hashes)):
-        idx = leaf_idx
-        proof: List[Dict[str, str]] = []
-        for level in levels[:-1]:
-            if idx % 2 == 0:
-                sibling_idx = idx + 1 if idx + 1 < len(level) else idx
-                position = "right"
-            else:
-                sibling_idx = idx - 1
-                position = "left"
-            proof.append({"position": position, "hash": level[sibling_idx].hex()})
-            idx //= 2
-        proofs.append(proof)
-
-    return root, proofs
 
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:

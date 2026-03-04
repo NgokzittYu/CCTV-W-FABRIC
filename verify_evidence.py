@@ -2,50 +2,19 @@
 import argparse
 import json
 import subprocess
-import hashlib
 import sys
 from pathlib import Path
 
-from anchor_to_fabric import build_fabric_env
 from config import SETTINGS
-
-
-def run(cmd, env=None, check=True):
-    proc = subprocess.run(cmd, env=env, text=True, capture_output=True)
-    if check and proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}"
-        )
-    return proc
+from services.crypto_utils import compute_evidence_hash as _compute_hash_from_bytes
+from services.fabric_client import build_fabric_env
 
 
 def compute_evidence_hash(json_path: Path, image_path: Path) -> str:
-    """Computes SHA256 hash of (normalized_json_bytes + image_bytes).
-    Must match the logic in anchor_to_fabric.py exactly.
-    """
-    sha256 = hashlib.sha256()
-
-    # 1. Read JSON, remove local metadata, then normalize
-    with json_path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if isinstance(data, dict):
-        data = dict(data)
-        data.pop("_anchor", None)
-        data.pop("_merkle", None)
-        data.pop("evidence_hash", None)
-        data.pop("evidence_hash_list", None)
-    normalized_json = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-    sha256.update(normalized_json)
-
-    # 2. Read image bytes
-    if image_path.exists():
-        with image_path.open("rb") as f:
-            image_bytes = f.read()
-        sha256.update(image_bytes)
-    
-    return sha256.hexdigest()
+    """Computes SHA256 hash of (normalized_json_bytes + image_bytes)."""
+    json_bytes = json_path.read_bytes()
+    img_bytes = image_path.read_bytes() if image_path.exists() else None
+    return _compute_hash_from_bytes(json_bytes, img_bytes)
 
 
 def get_onchain_evidence(env, channel, chaincode, evidence_id):
