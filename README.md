@@ -404,7 +404,7 @@ python3 anchor_to_fabric.py --export-audit-batch batch_1234567890_1234567900_xyz
 
 如有问题或建议，请通过以下方式联系：
 
-- 📧 Email: [your-email@example.com](mailto:your-email@example.com)
+- 📧 Email: [yyzbill1106@gmail.com](mailto:your-email@example.com)
 - 🐛 Issues: [GitHub Issues](https://github.com/yourusername/SecureLens/issues)
 
 ---
