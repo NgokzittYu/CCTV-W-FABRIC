@@ -11,6 +11,8 @@
 
 *从视频检测到区块链存证的完整闭环解决方案*
 
+🌐 **语言 / Language**: [中文](README.md) | [English](README.en.md)
+
 [快速开始](#-快速开始) • [功能特性](#-核心功能) • [架构设计](#-系统架构) • [文档](#-文档)
 
 </div>
@@ -389,6 +391,7 @@ python3 anchor_to_fabric.py --export-audit-batch batch_1234567890_1234567900_xyz
 | `CreateRectificationOrder` | 创建整改单 | Org2 |
 | `SubmitRectification` | 提交整改材料 | Org1 |
 | `ConfirmRectification` | 确认/拒绝整改 | Org2 |
+| `QueryOverdueOrders` | 查询超期未完成工单 | Org1, Org2, Org3 |
 | `ExportAuditTrail` | 导出审计轨迹 | Org1, Org2, Org3 |
 
 ---
@@ -443,6 +446,12 @@ python3 anchor_to_fabric.py --export-audit-batch batch_1234567890_1234567900_xyz
 - ✅ PDC 可见性正确（Org1/Org2 可读，Org3 不可读）
 - ✅ 设备签名验证通过
 - ✅ Merkle 证明验证通过
+
+运行 Go 链码单元测试：
+
+```bash
+cd chaincode && go test ./... -v
+```
 
 ---
 
