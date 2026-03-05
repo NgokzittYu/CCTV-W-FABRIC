@@ -13,12 +13,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
+	"github.com/hyperledger/fabric-protos-go/ledger/queryresult"
 )
 
 type mockStub struct {
@@ -90,6 +92,38 @@ func (m *mockStub) GetTransient() (map[string][]byte, error) {
 		out[k] = cloneBytes(v)
 	}
 	return out, nil
+}
+
+// mockStateIterator implements shim.StateQueryIteratorInterface for testing.
+type mockStateIterator struct {
+	items []*queryresult.KV
+	index int
+}
+
+func (i *mockStateIterator) HasNext() bool { return i.index < len(i.items) }
+func (i *mockStateIterator) Close() error  { return nil }
+func (i *mockStateIterator) Next() (*queryresult.KV, error) {
+	if !i.HasNext() {
+		return nil, fmt.Errorf("no more items")
+	}
+	item := i.items[i.index]
+	i.index++
+	return item, nil
+}
+
+func (m *mockStub) GetStateByRange(startKey, endKey string) (shim.StateQueryIteratorInterface, error) {
+	var keys []string
+	for k := range m.state {
+		if (startKey == "" || k >= startKey) && (endKey == "" || k < endKey) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	items := make([]*queryresult.KV, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, &queryresult.KV{Key: k, Value: cloneBytes(m.state[k])})
+	}
+	return &mockStateIterator{items: items}, nil
 }
 
 type fakeClientIdentity struct {
@@ -476,5 +510,54 @@ func TestRectificationWorkflow_StateTransition(t *testing.T) {
 	}
 	if order.Status != "CONFIRMED" {
 		t.Fatalf("unexpected rectification status: %s", order.Status)
+	}
+}
+
+func TestQueryOverdueOrders(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg1 := newTestContext(stub, org1MSP)
+	seedBatch(t, contract, ctxOrg1, "batch_overdue")
+
+	ctxOrg2 := newTestContext(stub, org2MSP)
+
+	// order_overdue: deadline in the past, OPEN → should appear
+	pastDeadline := time.Now().Unix() - 3600
+	err := contract.CreateRectificationOrder(ctxOrg2, "order_overdue", "batch_overdue", "team_a", pastDeadline, "past deadline")
+	if err != nil {
+		t.Fatalf("CreateRectificationOrder failed: %v", err)
+	}
+
+	// order_future: deadline in the future, OPEN → should NOT appear
+	futureDeadline := time.Now().Unix() + 86400
+	err = contract.CreateRectificationOrder(ctxOrg2, "order_future", "batch_overdue", "team_a", futureDeadline, "future deadline")
+	if err != nil {
+		t.Fatalf("CreateRectificationOrder failed: %v", err)
+	}
+
+	// order_confirmed: deadline in the past but CONFIRMED → should NOT appear
+	err = contract.CreateRectificationOrder(ctxOrg2, "order_confirmed", "batch_overdue", "team_a", pastDeadline, "confirmed order")
+	if err != nil {
+		t.Fatalf("CreateRectificationOrder failed: %v", err)
+	}
+	err = contract.SubmitRectification(ctxOrg1, "order_confirmed", "https://example.com/proof.jpg", "submit")
+	if err != nil {
+		t.Fatalf("SubmitRectification failed: %v", err)
+	}
+	err = contract.ConfirmRectification(ctxOrg2, "order_confirmed", true, "approved")
+	if err != nil {
+		t.Fatalf("ConfirmRectification failed: %v", err)
+	}
+
+	ctxOrg3 := newTestContext(stub, org3MSP)
+	overdue, err := contract.QueryOverdueOrders(ctxOrg3)
+	if err != nil {
+		t.Fatalf("QueryOverdueOrders failed: %v", err)
+	}
+	if len(overdue) != 1 {
+		t.Fatalf("expected 1 overdue order, got %d", len(overdue))
+	}
+	if overdue[0].ID != "order_overdue" {
+		t.Fatalf("expected order_overdue, got %s", overdue[0].ID)
 	}
 }

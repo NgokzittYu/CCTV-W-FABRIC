@@ -1018,6 +1018,42 @@ func (s *EvidenceSmartContract) GetHistoryForKey(ctx contractapi.TransactionCont
 	return history, nil
 }
 
+// QueryOverdueOrders returns all rectification orders whose deadline has passed and are still OPEN.
+func (s *EvidenceSmartContract) QueryOverdueOrders(ctx contractapi.TransactionContextInterface) ([]*RectificationOrder, error) {
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return nil, err
+	}
+
+	iter, err := ctx.GetStub().GetStateByRange(rectificationPrefix, rectificationPrefix+"\uffff")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query rectification orders: %v", err)
+	}
+	defer iter.Close()
+
+	now := time.Now().Unix()
+	var overdue []*RectificationOrder
+	for iter.HasNext() {
+		item, err := iter.Next()
+		if err != nil {
+			return nil, err
+		}
+		var order RectificationOrder
+		if err := json.Unmarshal(item.Value, &order); err != nil {
+			continue
+		}
+		if order.Status == "OPEN" && order.Deadline > 0 && now > order.Deadline {
+			o := order
+			overdue = append(overdue, &o)
+		}
+	}
+
+	sort.Slice(overdue, func(i, j int) bool {
+		return overdue[i].Deadline < overdue[j].Deadline
+	})
+
+	return overdue, nil
+}
+
 func main() {
 	chaincode, err := contractapi.NewChaincode(&EvidenceSmartContract{})
 	if err != nil {

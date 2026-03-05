@@ -1,6 +1,30 @@
 # Changelog
 
-## 2026-03-04 (代码工程化重构)
+## 2026-03-05 (功能修复：QueryOverdueOrders)
+
+### Fixed
+
+- **链码层 `QueryOverdueOrders` 功能缺口**（`chaincode/chaincode.go`）
+  - 新增 `QueryOverdueOrders` 方法，遍历所有 `rectify:` 前缀的工单
+  - 筛选条件：`Status == "OPEN"` 且 `Deadline > 0` 且 `now > Deadline`
+  - 结果按截止日期升序排列（最紧迫的超期工单排最前）
+  - ACL：Org1/Org2/Org3 均可查询（只读操作）
+- **Python 服务层空壳实现**（`services/workorder_service.py`）
+  - `query_overdue_workorders()` 从返回空列表改为调用链码 `QueryOverdueOrders`
+  - 支持按 `org` 参数过滤（按 `assignedTo` 或 `createdBy` 筛选）
+  - 支持分页（`page` / `limit` 参数）
+
+### Added
+
+- **链码单元测试**（`chaincode/chaincode_test.go`）
+  - 新增 `mockStateIterator`：实现 `shim.StateQueryIteratorInterface`，支持 `GetStateByRange` 范围查询
+  - 新增 `mockStub.GetStateByRange`：同时修复 `ExportAuditTrail` 测试的 stub 缺失问题
+  - 新增 `TestQueryOverdueOrders`：覆盖 3 种边界情况
+    - 已超期且 OPEN → 应出现在结果中
+    - 未超期且 OPEN → 不应出现
+    - 已超期但已 CONFIRMED → 不应出现
+
+
 
 ### Added
 - 新增 `services/` 模块目录，实现职责分离：

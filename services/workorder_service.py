@@ -115,14 +115,33 @@ def confirm_rectification(order_id: str, approved: bool, comments: str) -> Dict[
 
 
 def query_overdue_workorders(org: Optional[str] = None, page: int = 1, limit: int = 20) -> Dict[str, Any]:
-    """Query overdue workorders."""
+    """Query overdue workorders via chaincode QueryOverdueOrders."""
+    fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+    env, orderer_ca, org2_tls = build_fabric_env(fabric_samples)
+
+    result = query_chaincode(
+        env,
+        SETTINGS.channel_name,
+        SETTINGS.chaincode_name,
+        "QueryOverdueOrders",
+        [],
+    )
+
+    all_orders: list = json.loads(result) if result else []
+
+    if org:
+        all_orders = [o for o in all_orders if o.get("assignedTo") == org or o.get("createdBy") == org]
+
+    total = len(all_orders)
+    offset = (page - 1) * limit
+    paged = all_orders[offset: offset + limit]
+
     return {
         "status": "success",
-        "message": "Overdue workorder query not yet implemented in chaincode",
-        "data": [],
+        "data": paged,
         "page": page,
         "limit": limit,
-        "total": 0,
+        "total": total,
     }
 
 
