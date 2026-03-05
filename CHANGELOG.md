@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-05 (报告签名验证：VerifyEvent 链上实现)
+
+### Added
+
+- **后端 API `POST /api/audit/verify`**（`web_app.py`）
+  - 接收参数：`batchId`、`eventHash`（叶节点 hash）、`merkleProofJSON`（JSON 数组）、`merkleRoot`
+  - 调用链码 `VerifyEvent`，在区块链上对 Merkle Proof 进行真实性验证
+  - 返回 `{ verified: bool, batchId, message }`
+
+- **前端验证区域重构**（`templates/audit.html`）
+  - 验证表单从"报告ID + 签名"改为四字段（批次ID、事件Hash、Merkle Proof、Merkle Root），与链码 `VerifyEvent` 入参完全对齐
+  - `verifyReport()` 删除 mock 逻辑（原 `signature.length > 32`），改为真实调用 `POST /api/audit/verify`
+  - 验证按钮标注"链上验证"，明确区分本地和链上两种验证路径
+  - `renderReportPreview()` 新增自动填充逻辑：预览报告时若首个事件含 `merkleProof` 字段，自动填入验证表单，方便一键验证
+
+### Fixed
+
+- **文档与代码不一致风险**：`PHASE4_COMPLETION_REPORT.md` 中标注为待办的"实现真实的报告签名验证"现已完成，前后端均调用链码而非 mock
+
+---
+
 ## 2026-03-05 (功能修复：QueryOverdueOrders)
 
 ### Fixed

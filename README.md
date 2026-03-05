@@ -451,6 +451,7 @@ python3 anchor_to_fabric.py --export-audit-batch batch_1234567890_1234567900_xyz
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/audit/export` | GET | 导出审计报告 |
+| `/api/audit/verify` | POST | 链上验证事件 Merkle Proof（调用 `VerifyEvent`） |
 
 ### 系统配置
 

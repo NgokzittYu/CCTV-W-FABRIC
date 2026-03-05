@@ -261,6 +261,43 @@ def api_export_audit(batch_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/audit/verify")
+async def api_verify_audit_report(request: Request):
+    """Verify audit report signature via chaincode VerifyEvent."""
+    try:
+        data = await request.json()
+        batch_id = data.get("batchId", "").strip()
+        event_hash = data.get("eventHash", "").strip()
+        merkle_proof_json = data.get("merkleProofJSON", "").strip()
+        merkle_root = data.get("merkleRoot", "").strip()
+
+        if not all([batch_id, event_hash, merkle_proof_json, merkle_root]):
+            return JSONResponse(
+                {"verified": False, "message": "缺少必要参数：batchId、eventHash、merkleProofJSON、merkleRoot"},
+                status_code=400,
+            )
+
+        fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+        env, _, _ = build_fabric_env(fabric_samples)
+
+        result = query_chaincode(
+            env,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "VerifyEvent",
+            [batch_id, event_hash, merkle_proof_json, merkle_root],
+        )
+
+        verified = result.strip().lower() == "true"
+        return JSONResponse({
+            "verified": verified,
+            "batchId": batch_id,
+            "message": "报告签名验证通过" if verified else "报告签名验证失败，数据可能已被篡改",
+        })
+    except Exception as e:
+        return JSONResponse({"verified": False, "message": str(e)}, status_code=500)
+
+
 @app.get("/api/config")
 def api_get_config():
     """Get Fabric configuration."""
