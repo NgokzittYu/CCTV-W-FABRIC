@@ -162,21 +162,59 @@ flowchart TB
 ```
 SecureLens/
 ├── 🐍 web_app.py              # FastAPI Web service + real-time detection
+├── 🎯 detect.py               # Standalone YOLO detection runner
 ├── ⚓ anchor_to_fabric.py     # Offline anchoring script
 ├── ✅ verify_evidence.py      # CLI verification tool
 ├── ⚙️  config.py               # Unified configuration management
-├── 📜 chaincode/
-│   ├── chaincode.go           # Fabric smart contract (Go)
-│   └── collections_config.json # Private data collection config
-├── 🚀 scripts/
-│   ├── stage3_setup_network.sh # 3-org network startup script
-│   └── stage3_verify.sh        # Acceptance test script
-├── 📄 templates/
-│   └── index.html             # Web frontend
+├── 📦 requirements.txt        # Python dependencies
 ├── 📋 .env.example            # Configuration template
-└── 📚 docs/
-    ├── FABRIC_RUNBOOK.md      # Fabric operations manual
-    └── EXECUTE_INSTRUCTIONS.md # Execution step-by-step guide
+│
+├── 🔧 services/               # Core service modules
+│   ├── detection_service.py   # YOLO detection & video stream management
+│   ├── event_aggregator.py    # Multi-frame event aggregation & state machine
+│   ├── fabric_client.py       # Hyperledger Fabric SDK client
+│   ├── merkle_utils.py        # Merkle Tree construction & proof verification
+│   ├── crypto_utils.py        # ECDSA signing & hash utilities
+│   └── workorder_service.py   # Work order lifecycle management
+│
+├── 📜 chaincode/              # Hyperledger Fabric smart contract
+│   ├── chaincode.go           # Fabric smart contract (Go)
+│   ├── chaincode_test.go      # Go unit tests
+│   ├── collections_config.json # Private data collection config
+│   ├── go.mod / go.sum        # Go module definitions
+│   └── vendor/                # Vendored Go dependencies
+│
+├── 🚀 scripts/                # Network & deployment scripts
+│   ├── stage3_setup_network.sh # 3-org Fabric network startup
+│   ├── stage3_verify.sh        # Acceptance test suite
+│   └── check_stage1.sh         # Stage 1 environment check
+│
+├── 📄 templates/              # Jinja2 HTML templates
+│   ├── index.html             # Main monitoring dashboard
+│   ├── workorder.html         # Work order management page
+│   ├── audit.html             # Audit report page
+│   └── config.html            # System configuration page
+│
+├── 🧪 tests/                  # Python unit tests
+│   ├── test_crypto_utils.py
+│   ├── test_event_aggregator.py
+│   └── test_merkle_utils.py
+│
+├── 🔑 device_keys/            # Device signing key pairs (ECDSA)
+│   └── cctv-kctmc-apple-01/   # Per-device key directory
+│
+├── 📁 evidences/              # Local evidence storage
+│   ├── events/                # Individual event snapshots & metadata
+│   └── batches/               # Merkle batch records
+│
+└── 📚 docs/                   # Documentation files
+    ├── FABRIC_RUNBOOK.md       # Fabric operations manual
+    ├── EXECUTE_INSTRUCTIONS.md # Step-by-step execution guide
+    ├── FABRIC_RESET_GUIDE.md   # Network reset & troubleshooting
+    ├── QUICKSTART_PHASE4.md    # Quick start guide
+    ├── PHASE4_SUMMARY.md       # Phase 4 feature summary
+    ├── PHASE4_COMPLETION_REPORT.md # Completion report
+    └── CHANGELOG.md            # Version history
 ```
 
 ## 🚀 Quick Start

@@ -162,21 +162,59 @@ flowchart TB
 ```
 SecureLens/
 ├── 🐍 web_app.py              # FastAPI Web 服务 + 实时检测
+├── 🎯 detect.py               # 独立 YOLO 检测运行器
 ├── ⚓ anchor_to_fabric.py     # 离线补链脚本
 ├── ✅ verify_evidence.py      # 命令行验真工具
 ├── ⚙️  config.py               # 统一配置管理
-├── 📜 chaincode/
-│   ├── chaincode.go           # Fabric 智能合约（Go）
-│   └── collections_config.json # 私有数据集合配置
-├── 🚀 scripts/
-│   ├── stage3_setup_network.sh # 3 组织网络启动脚本
-│   └── stage3_verify.sh        # 验收测试脚本
-├── 📄 templates/
-│   └── index.html             # Web 前端界面
+├── 📦 requirements.txt        # Python 依赖清单
 ├── 📋 .env.example            # 配置模板
-└── 📚 docs/
-    ├── FABRIC_RUNBOOK.md      # Fabric 运维手册
-    └── EXECUTE_INSTRUCTIONS.md # 执行步骤说明
+│
+├── 🔧 services/               # 核心服务模块
+│   ├── detection_service.py   # YOLO 检测 & 视频流管理
+│   ├── event_aggregator.py    # 多帧事件聚合 & 状态机
+│   ├── fabric_client.py       # Hyperledger Fabric SDK 客户端
+│   ├── merkle_utils.py        # Merkle Tree 构建 & 证明验证
+│   ├── crypto_utils.py        # ECDSA 签名 & 哈希工具
+│   └── workorder_service.py   # 整改单生命周期管理
+│
+├── 📜 chaincode/              # Hyperledger Fabric 智能合约
+│   ├── chaincode.go           # Fabric 智能合约（Go）
+│   ├── chaincode_test.go      # Go 单元测试
+│   ├── collections_config.json # 私有数据集合配置
+│   ├── go.mod / go.sum        # Go 模块定义
+│   └── vendor/                # 依赖包（vendor 模式）
+│
+├── 🚀 scripts/                # 网络 & 部署脚本
+│   ├── stage3_setup_network.sh # 3 组织 Fabric 网络启动
+│   ├── stage3_verify.sh        # 验收测试套件
+│   └── check_stage1.sh         # 阶段一环境检查
+│
+├── 📄 templates/              # Jinja2 HTML 模板
+│   ├── index.html             # 主监控仪表盘
+│   ├── workorder.html         # 整改单管理页面
+│   ├── audit.html             # 审计报告页面
+│   └── config.html            # 系统配置页面
+│
+├── 🧪 tests/                  # Python 单元测试
+│   ├── test_crypto_utils.py
+│   ├── test_event_aggregator.py
+│   └── test_merkle_utils.py
+│
+├── 🔑 device_keys/            # 设备签名密钥对（ECDSA）
+│   └── cctv-kctmc-apple-01/   # 单设备密钥目录
+│
+├── 📁 evidences/              # 本地证据存储
+│   ├── events/                # 单事件快照 & 元数据
+│   └── batches/               # Merkle 批次记录
+│
+└── 📚 docs/                   # 文档资料
+    ├── FABRIC_RUNBOOK.md       # Fabric 运维手册
+    ├── EXECUTE_INSTRUCTIONS.md # 执行步骤说明
+    ├── FABRIC_RESET_GUIDE.md   # 网络重置 & 故障排查
+    ├── QUICKSTART_PHASE4.md    # 快速启动指南
+    ├── PHASE4_SUMMARY.md       # 阶段四功能总结
+    ├── PHASE4_COMPLETION_REPORT.md # 完成报告
+    └── CHANGELOG.md            # 版本历史
 ```
 
 ## 🚀 快速开始
