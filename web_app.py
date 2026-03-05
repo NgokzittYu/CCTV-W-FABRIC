@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -120,10 +121,11 @@ def video_feed(stream_type: str):
     def generate():
         while True:
             with lock:
-                frame_data = frame_buffer.get("ann" if stream_type == "annotated" else "raw")
+                frame_data = frame_buffer.get("ann" if stream_type == "ann" else "raw")
             if frame_data:
                 yield (b"--frame\r\n"
                        b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n")
+            time.sleep(0.03)
 
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
@@ -142,28 +144,90 @@ async def websocket_endpoint(websocket: WebSocket):
 def verify_evidence(event_id: str):
     """Verify evidence using Merkle proof."""
     json_path = EVIDENCE_DIR / f"{event_id}.json"
-    if not json_path.exists():
-        return JSONResponse({"error": "Event not found"}, status_code=404)
 
-    event_data = json.loads(json_path.read_text(encoding="utf-8"))
-    merkle_info = event_data.get("_merkle")
+    # Try to get event data from local file first
+    event_data = None
+    merkle_info = None
+
+    if json_path.exists():
+        event_data = json.loads(json_path.read_text(encoding="utf-8"))
+        merkle_info = event_data.get("_merkle")
+
+    # If local file doesn't exist or has no merkle info, search in batch files
+    if not merkle_info:
+        # Search for the event in batch files
+        batches_dir = EVIDENCE_DIR / "batches"
+        if batches_dir.exists():
+            for batch_file in batches_dir.rglob("batch_*.json"):
+                try:
+                    batch_data = json.loads(batch_file.read_text(encoding="utf-8"))
+                    for event in batch_data.get("events", []):
+                        if event.get("event_id") == event_id:
+                            # Found the event in batch, reconstruct merkle info
+                            merkle_info = {
+                                "proof": event.get("proof", []),
+                                "merkleRoot": batch_data.get("merkle_root", ""),
+                                "batchId": batch_data.get("batch_id", ""),
+                                "txId": batch_data.get("tx_id", ""),
+                                "blockNumber": batch_data.get("block_number"),
+                                "timestamp": batch_data.get("timestamp"),
+                            }
+                            # Get evidence hash from event or query chain
+                            if not event_data:
+                                event_data = {"evidence_hash": event.get("evidence_hash", "")}
+                            break
+                except Exception as e:
+                    continue
+                if merkle_info:
+                    break
 
     if not merkle_info:
-        return JSONResponse({"error": "No Merkle proof available"}, status_code=400)
+        return JSONResponse({
+            "status": "error",
+            "message": "未上链/不存在 (Event not found in batches)"
+        }, status_code=404)
 
     evidence_hash = event_data.get("evidence_hash", "")
     proof = merkle_info.get("proof", [])
     expected_root = merkle_info.get("merkleRoot", "")
+    batch_id = merkle_info.get("batchId", "")
+    tx_id = merkle_info.get("txId", "")
+    block_number = merkle_info.get("blockNumber")
+    timestamp = merkle_info.get("timestamp")
 
     computed_root = apply_merkle_proof(evidence_hash, proof)
     verified = computed_root == expected_root
 
+    # Query on-chain evidence to get chain hash
+    chain_hash = ""
+    try:
+        fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+        env, _, _ = build_fabric_env(fabric_samples)
+        result = query_chaincode(
+            env,
+            CHANNEL_NAME,
+            CHAINCODE_NAME,
+            "ReadEvidence",
+            [event_id],
+        )
+        if result:
+            chain_evidence = json.loads(result)
+            chain_hash = chain_evidence.get("evidenceHash", "")
+    except Exception as e:
+        print(f"[WARN] Failed to query chain hash: {e}")
+
     return JSONResponse({
+        "status": "success" if verified else "failed",
         "verified": verified,
-        "evidenceHash": evidence_hash,
-        "computedRoot": computed_root,
-        "expectedRoot": expected_root,
-        "batchId": merkle_info.get("batchId"),
+        "match": verified,  # Frontend expects 'match' field
+        "local_hash": evidence_hash,
+        "chain_hash": chain_hash,
+        "proof_root": computed_root,
+        "expected_root": expected_root,
+        "batch_id": batch_id,
+        "tx_id": tx_id,
+        "block_number": block_number,
+        "onchain_time": timestamp,
     })
 
 
@@ -296,6 +360,128 @@ async def api_verify_audit_report(request: Request):
         })
     except Exception as e:
         return JSONResponse({"verified": False, "message": str(e)}, status_code=500)
+
+
+@app.get("/api/ledger/recent")
+def api_get_recent_blocks():
+    """Get recent blockchain batches."""
+    try:
+        batches_dir = EVIDENCE_DIR / "batches"
+        if not batches_dir.exists():
+            return JSONResponse({"blocks": []})
+
+        # Read all batch files and sort by block number
+        batch_files = list(batches_dir.rglob("batch_*.json"))
+        blocks = []
+        for bf in batch_files:
+            try:
+                data = json.loads(bf.read_text(encoding="utf-8"))
+                block_number = data.get("block_number")
+                # Skip batches without block number
+                if block_number is None:
+                    continue
+                blocks.append({
+                    "batch_id": data.get("batch_id", ""),
+                    "block_number": block_number,
+                    "tx_id": data.get("tx_id", ""),
+                    "merkle_root": data.get("merkle_root", ""),
+                    "event_count": data.get("event_count", len(data.get("events", []))),
+                    "timestamp": data.get("timestamp", 0)
+                })
+            except Exception as e:
+                print(f"[WARN] Failed to read batch file {bf}: {e}")
+                continue
+
+        # Sort by block number (descending) and return top 20
+        blocks.sort(key=lambda b: b["block_number"], reverse=True)
+        return JSONResponse({"blocks": blocks[:20]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/batch/{batch_id}")
+def api_get_batch_details(batch_id: str):
+    """Get batch details with enriched event information."""
+    try:
+        # Find batch file
+        batches_dir = EVIDENCE_DIR / "batches"
+        batch_file = None
+        for bf in batches_dir.rglob(f"{batch_id}.json"):
+            batch_file = bf
+            break
+
+        if not batch_file or not batch_file.exists():
+            return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+        batch_data = json.loads(batch_file.read_text(encoding="utf-8"))
+
+        # Enrich events with type information
+        enriched_events = []
+        for event in batch_data.get("events", []):
+            event_id = event.get("event_id")
+            event_json_path = EVIDENCE_DIR / f"{event_id}.json"
+
+            event_info = {
+                "event_id": event_id,
+                "evidence_hash": event.get("evidence_hash", ""),
+                "leaf_index": event.get("leaf_index", 0),
+                "type": "unknown",
+                "detection_count": 0
+            }
+
+            event_data = None
+
+            # Try to read from local file first
+            if event_json_path.exists():
+                try:
+                    event_data = json.loads(event_json_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print(f"[WARN] Failed to read local event {event_id}: {e}")
+
+            # If local file doesn't exist, try to query from blockchain
+            if not event_data:
+                try:
+                    fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+                    env, _, _ = build_fabric_env(fabric_samples)
+                    result = query_chaincode(
+                        env,
+                        CHANNEL_NAME,
+                        CHAINCODE_NAME,
+                        "ReadEvidence",
+                        [event_id],
+                    )
+                    if result:
+                        event_data = json.loads(result)
+                except Exception as e:
+                    print(f"[WARN] Failed to query event {event_id} from chain: {e}")
+
+            # Extract type and detection count from event data
+            if event_data:
+                # Try multiple possible field names for event type
+                event_type = event_data.get("top_class") or event_data.get("event_type") or event_data.get("type")
+                if event_type:
+                    # Extract class name from event_type like "detection_car" -> "car"
+                    if isinstance(event_type, str) and event_type.startswith("detection_"):
+                        event_info["type"] = event_type.replace("detection_", "")
+                    else:
+                        event_info["type"] = str(event_type)
+                detections = event_data.get("detections", [])
+                event_info["detection_count"] = len(detections)
+
+            enriched_events.append(event_info)
+
+        return JSONResponse({
+            "status": "success",
+            "batch_id": batch_data.get("batch_id"),
+            "block_number": batch_data.get("block_number"),
+            "tx_id": batch_data.get("tx_id"),
+            "merkle_root": batch_data.get("merkle_root"),
+            "timestamp": batch_data.get("timestamp"),
+            "event_count": batch_data.get("event_count"),
+            "events": enriched_events
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/config")

@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-03-05 (批次文件保存与恢复机制修复)
+
+### Fixed
+
+- **批次文件保存缺失** (`services/detection_service.py`)
+  - `_anchor_batch` 方法新增批次文件保存逻辑
+  - 批次文件保存到 `evidences/batches/{date}/{batch_id}.json`
+  - 包含完整批次元数据：batch_id、merkle_root、tx_id、block_number、events 列表
+  - 每个事件包含：event_id、evidence_hash、leaf_index、proof
+
+- **批次列表排序错误** (`web_app.py`)
+  - `/api/ledger/recent` 端点从按文件修改时间排序改为按区块号排序
+  - 修复恢复的批次文件因创建时间新而显示在前的问题
+  - 添加 `block_number is None` 检查，跳过无效批次文件
+
+- **验证 API 增强** (`web_app.py`)
+  - `/api/verify/{event_id}` 支持从批次文件获取 Merkle 证明
+  - 当本地事件文件不存在时，自动搜索批次文件
+  - 从批次文件重建 merkle_info 和 evidence_hash
+
+- **批次详情 API 增强** (`web_app.py`)
+  - `/api/batch/{batch_id}` 支持从区块链查询事件详情
+  - 当本地事件文件缺失时，调用 `ReadEvidence` 链码查询
+  - 正确提取事件类型（支持 top_class、event_type、type 字段）
+  - 修复旧批次事件显示为 "UNKNOWN" 的问题
+
+### Added
+
+- **批次恢复工具** (`recover_batches.py`)
+  - 从现有事件文件的 `_merkle` 和 `_anchor` 信息重建批次文件
+  - 自动按 batch_id 分组事件
+  - 按 leaf_index 排序事件
+  - 恢复了 118 个丢失的批次文件
+
+### Changed
+
+- **网络重置**
+  - 清理所有旧的证据文件和批次文件
+  - 重建 Fabric 网络（3 个组织）
+  - 重新部署 evidence 链码
+  - 从区块 #8 开始记录新的证据批次
+
+### Notes
+
+- 批次文件现在会在每次批次上链后自动保存
+- 验证功能支持本地事件文件缺失的场景
+- 批次列表按区块号降序正确排序
+- 系统从全新状态开始运行
+
+---
+
 ## 2026-03-05 (报告签名验证：VerifyEvent 链上实现)
 
 ### Added

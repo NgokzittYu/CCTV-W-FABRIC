@@ -237,88 +237,150 @@
         <div id="verifyCard"
             class="bg-white rounded-2xl shadow-2xl p-6 md:p-8 w-[95vw] max-w-lg max-h-[90vh] overflow-y-auto transform transition-all scale-95 opacity-0">
 
-            <!-- Header -->
-            <div class="flex justify-between items-start mb-5">
+            <!-- Batch View Container -->
+            <div id="batchViewContainer" class="hidden">
+                <div class="flex justify-between items-start mb-5">
+                    <div>
+                        <h3 class="text-xl font-bold">Batch Details</h3>
+                        <p class="text-gray-400 text-xs mt-1">
+                            <span id="batchEventCount">0</span> events in this batch
+                        </p>
+                    </div>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-black transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Batch Metadata -->
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <div class="p-3 bg-gray-50 rounded-xl">
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide">Block Height</p>
+                        <p id="batchBlockNum" class="font-mono text-sm font-semibold text-gray-800 mt-0.5">#?</p>
+                    </div>
+                    <div class="p-3 bg-gray-50 rounded-xl">
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide">Timestamp</p>
+                        <p id="batchTimestamp" class="text-xs text-gray-600 mt-0.5">...</p>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Transaction ID</p>
+                    <p id="batchTxId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">...</p>
+                </div>
+
+                <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Merkle Root</p>
+                    <p id="batchMerkleRoot" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">...</p>
+                </div>
+
+                <!-- Event List -->
+                <div class="relative my-4">
+                    <div class="absolute inset-0 flex items-center">
+                        <div class="w-full border-t border-gray-200"></div>
+                    </div>
+                    <div class="relative flex justify-center">
+                        <span class="bg-white px-3 text-[10px] text-gray-400 uppercase tracking-wider">Events in Batch</span>
+                    </div>
+                </div>
+
+                <div id="batchEventList" class="space-y-2 max-h-96 overflow-y-auto">
+                    <p class="text-xs text-gray-400">Loading events...</p>
+                </div>
+            </div>
+
+            <!-- Event View Container -->
+            <div id="eventViewContainer" class="hidden">
+                <!-- Header with Back Button -->
+                <div class="flex justify-between items-start mb-5">
+                    <button onclick="switchToView('batch-view')" class="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                        Back to Batch
+                    </button>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-black transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
                 <div>
-                    <h3 class="text-xl font-bold">Block Details</h3>
+                    <h3 class="text-xl font-bold">Event Details</h3>
                     <p class="text-gray-400 text-xs mt-1">Status: <span
                             class="text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded">Anchored</span></p>
                 </div>
-                <button onclick="closeModal()" class="text-gray-400 hover:text-black transition">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-            </div>
 
-            <!-- Meta -->
-            <div class="grid grid-cols-2 gap-3 mb-4">
-                <div class="p-3 bg-gray-50 rounded-xl">
-                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Block Height</p>
-                    <p id="modalBlockNum" class="font-mono text-sm font-semibold text-gray-800 mt-0.5">#?</p>
+                <!-- Meta -->
+                <div class="grid grid-cols-2 gap-3 mb-4 mt-5">
+                    <div class="p-3 bg-gray-50 rounded-xl">
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide">Block Height</p>
+                        <p id="modalBlockNum" class="font-mono text-sm font-semibold text-gray-800 mt-0.5">#?</p>
+                    </div>
+                    <div class="p-3 bg-gray-50 rounded-xl">
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide">Evidence ID</p>
+                        <p id="modalEventId" class="font-mono text-xs text-gray-600 break-all mt-0.5">…</p>
+                    </div>
                 </div>
-                <div class="p-3 bg-gray-50 rounded-xl">
-                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Evidence ID</p>
-                    <p id="modalEventId" class="font-mono text-xs text-gray-600 break-all mt-0.5">…</p>
-                </div>
-            </div>
 
-            <div class="p-3 bg-gray-50 rounded-xl mb-4">
-                <p class="text-[10px] text-gray-400 uppercase tracking-wide">Transaction ID</p>
-                <p id="modalTxId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
-            </div>
-            <div class="p-3 bg-gray-50 rounded-xl mb-4">
-                <p class="text-[10px] text-gray-400 uppercase tracking-wide">Merkle Batch</p>
-                <p id="modalBatchId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
-            </div>
+                <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Transaction ID</p>
+                    <p id="modalTxId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
+                </div>
+                <div class="p-3 bg-gray-50 rounded-xl mb-4">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">Merkle Batch</p>
+                    <p id="modalBatchId" class="font-mono text-[11px] text-gray-600 break-all mt-0.5">…</p>
+                </div>
 
-            <!-- Divider -->
-            <div class="relative my-4">
-                <div class="absolute inset-0 flex items-center">
-                    <div class="w-full border-t border-gray-200"></div>
+                <!-- Divider -->
+                <div class="relative my-4">
+                    <div class="absolute inset-0 flex items-center">
+                        <div class="w-full border-t border-gray-200"></div>
+                    </div>
+                    <div class="relative flex justify-center"><span
+                            class="bg-white px-3 text-[10px] text-gray-400 uppercase tracking-wider">Integrity
+                            Verification</span></div>
                 </div>
-                <div class="relative flex justify-center"><span
-                        class="bg-white px-3 text-[10px] text-gray-400 uppercase tracking-wider">Integrity
-                        Verification</span></div>
-            </div>
 
-            <!-- Hashes -->
-            <div class="space-y-3 mb-2">
-                <div>
-                    <p class="text-[10px] text-gray-400 uppercase tracking-wide mb-1">Local File Hash</p>
-                    <p id="localHash" class="font-mono text-[11px] text-gray-800 break-all bg-gray-50 rounded-lg p-2.5">
-                        Computing…</p>
+                <!-- Hashes -->
+                <div class="space-y-3 mb-2">
+                    <div>
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide mb-1">Local File Hash</p>
+                        <p id="localHash" class="font-mono text-[11px] text-gray-800 break-all bg-gray-50 rounded-lg p-2.5">
+                            Computing…</p>
+                    </div>
+                    <div>
+                        <p class="text-[10px] text-blue-400 uppercase tracking-wide mb-1">On-Chain Immutable Hash</p>
+                        <p id="chainHash" class="font-mono text-[11px] text-blue-700 break-all bg-blue-50 rounded-lg p-2.5">
+                            Fetching…</p>
+                    </div>
+                    <div>
+                        <p class="text-[10px] text-indigo-400 uppercase tracking-wide mb-1">Merkle Root From Proof</p>
+                        <p id="proofRoot" class="font-mono text-[11px] text-indigo-700 break-all bg-indigo-50 rounded-lg p-2.5">
+                            Waiting…</p>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>Anchored At:</span>
+                        <span id="onchainTime" class="font-mono">…</span>
+                    </div>
                 </div>
-                <div>
-                    <p class="text-[10px] text-blue-400 uppercase tracking-wide mb-1">On-Chain Immutable Hash</p>
-                    <p id="chainHash" class="font-mono text-[11px] text-blue-700 break-all bg-blue-50 rounded-lg p-2.5">
-                        Fetching…</p>
-                </div>
-                <div>
-                    <p class="text-[10px] text-indigo-400 uppercase tracking-wide mb-1">Merkle Root From Proof</p>
-                    <p id="proofRoot" class="font-mono text-[11px] text-indigo-700 break-all bg-indigo-50 rounded-lg p-2.5">
-                        Waiting…</p>
-                </div>
-                <div class="flex justify-between text-xs text-gray-500">
-                    <span>Anchored At:</span>
-                    <span id="onchainTime" class="font-mono">…</span>
-                </div>
-            </div>
 
-            <!-- Result -->
-            <div id="verifyResult" class="mt-5 text-center hidden"></div>
+                <!-- Result -->
+                <div id="verifyResult" class="mt-5 text-center hidden"></div>
 
-            <!-- History -->
-            <div class="mt-5">
-                <div class="flex items-center justify-between mb-2">
-                    <p class="text-[10px] text-gray-400 uppercase tracking-wide">On-Chain History</p>
-                    <button id="historyBtn"
-                        class="text-[11px] px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
-                        onclick="loadHistory()">Load History</button>
-                </div>
-                <div id="historyList" class="space-y-2 max-h-40 overflow-y-auto pr-1">
-                    <p class="text-xs text-gray-400">No history loaded.</p>
+                <!-- History -->
+                <div class="mt-5">
+                    <div class="flex items-center justify-between mb-2">
+                        <p class="text-[10px] text-gray-400 uppercase tracking-wide">On-Chain History</p>
+                        <button id="historyBtn"
+                            class="text-[11px] px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+                            onclick="loadHistory()">Load History</button>
+                    </div>
+                    <div id="historyList" class="space-y-2 max-h-40 overflow-y-auto pr-1">
+                        <p class="text-xs text-gray-400">No history loaded.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -332,6 +394,11 @@
         const empty = document.getElementById('empty-state');
         let activeHistoryKey = null;
         const cardStateByKey = new Map();
+
+        // Modal state management
+        let modalState = 'batch-view'; // 'batch-view' or 'event-view'
+        let currentBatchData = null;
+        let currentEventId = null;
 
         function cardKey(d) {
             if (d.batch_id) return `batch:${d.batch_id}`;
@@ -533,7 +600,11 @@
         }
 
         async function loadHistory() {
-            if (!activeHistoryKey) return;
+            if (!activeHistoryKey) {
+                const target = document.getElementById('historyList');
+                target.innerHTML = '<p class="text-xs text-yellow-600">⚠️ History is only available for individual events. Use the manual verification below to check a specific event_id.</p>';
+                return;
+            }
             const target = document.getElementById('historyList');
             target.innerHTML = '<p class="text-xs text-gray-400">Loading...</p>';
             try {
@@ -563,10 +634,140 @@
             }
         }
 
+        // View switching function
+        function switchToView(view) {
+            modalState = view;
+            const batchView = document.getElementById('batchViewContainer');
+            const eventView = document.getElementById('eventViewContainer');
+
+            if (view === 'batch-view') {
+                batchView.classList.remove('hidden');
+                eventView.classList.add('hidden');
+                if (currentBatchData) {
+                    renderBatchView(currentBatchData);
+                }
+            } else if (view === 'event-view') {
+                batchView.classList.add('hidden');
+                eventView.classList.remove('hidden');
+            }
+        }
+
+        // Open batch modal
+        async function openBatchModal(batchId) {
+            currentBatchData = null;
+            currentEventId = null;
+            modalState = 'batch-view';
+
+            // Show modal with loading state
+            modal.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                mCard.classList.remove('scale-95', 'opacity-0');
+                mCard.classList.add('scale-100', 'opacity-100');
+            });
+
+            switchToView('batch-view');
+            document.getElementById('batchEventList').innerHTML = '<p class="text-xs text-gray-400 animate-pulse">Loading events...</p>';
+
+            try {
+                const res = await fetch(`/api/batch/${batchId}`);
+                const data = await res.json();
+
+                if (!res.ok || data.status === 'error') {
+                    document.getElementById('batchEventList').innerHTML = `<p class="text-xs text-red-500">Error: ${data.error || data.message}</p>`;
+                    return;
+                }
+
+                currentBatchData = data;
+                renderBatchView(data);
+            } catch (e) {
+                document.getElementById('batchEventList').innerHTML = `<p class="text-xs text-red-500">Failed to load batch: ${e.message}</p>`;
+            }
+        }
+
+        // Render batch view
+        function renderBatchView(data) {
+            document.getElementById('batchBlockNum').innerText = data.block_number ? `#${data.block_number}` : '#?';
+            document.getElementById('batchTxId').innerText = data.tx_id || 'N/A';
+            document.getElementById('batchMerkleRoot').innerText = data.merkle_root || 'N/A';
+            document.getElementById('batchTimestamp').innerText = data.timestamp
+                ? new Date(data.timestamp * 1000).toLocaleString()
+                : 'N/A';
+            document.getElementById('batchEventCount').innerText = data.event_count || data.events.length;
+
+            const eventList = document.getElementById('batchEventList');
+
+            if (!data.events || data.events.length === 0) {
+                eventList.innerHTML = '<p class="text-xs text-gray-400">No events in this batch.</p>';
+                return;
+            }
+
+            // Render event cards
+            eventList.innerHTML = data.events.map(evt => {
+                const hashShort = evt.evidence_hash.substring(0, 12);
+                const detectionText = evt.detection_count > 1
+                    ? `${evt.type} +${evt.detection_count - 1}`
+                    : evt.type;
+
+                // Color coding by type
+                let typeColor = 'bg-blue-50 text-blue-600 border-blue-200';
+                if (evt.type === 'person') typeColor = 'bg-purple-50 text-purple-600 border-purple-200';
+                if (evt.type === 'car') typeColor = 'bg-indigo-50 text-indigo-600 border-indigo-200';
+                if (evt.type === 'motorcycle') typeColor = 'bg-orange-50 text-orange-600 border-orange-200';
+                if (evt.type === 'truck') typeColor = 'bg-teal-50 text-teal-600 border-teal-200';
+                if (evt.type === 'bus') typeColor = 'bg-pink-50 text-pink-600 border-pink-200';
+
+                return `
+                    <div class="p-3 border rounded-lg cursor-pointer hover:shadow-md transition ${typeColor}"
+                         onclick="openEventFromBatch('${evt.event_id}')">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-semibold uppercase">${detectionText}</span>
+                                <span class="text-[10px] text-gray-400">Leaf #${evt.leaf_index}</span>
+                            </div>
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                            </svg>
+                        </div>
+                        <div class="text-[10px] font-mono text-gray-500 mb-1">${evt.event_id}</div>
+                        <div class="text-[9px] font-mono text-gray-400">Hash: ${hashShort}...</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Open event from batch
+        async function openEventFromBatch(eventId) {
+            currentEventId = eventId;
+            switchToView('event-view');
+
+            // Populate event view with data
+            document.getElementById('modalEventId').innerText = eventId;
+            document.getElementById('modalTxId').innerText = currentBatchData?.tx_id || '...';
+            document.getElementById('modalBlockNum').innerText = currentBatchData?.block_number ? `#${currentBatchData.block_number}` : '#?';
+            document.getElementById('modalBatchId').innerText = currentBatchData?.batch_id || 'N/A';
+            document.getElementById('localHash').innerText = 'Computing...';
+            document.getElementById('chainHash').innerText = 'Querying peer...';
+            document.getElementById('proofRoot').innerText = 'Waiting...';
+            document.getElementById('onchainTime').innerText = '...';
+            document.getElementById('verifyResult').classList.add('hidden');
+            document.getElementById('historyList').innerHTML = '<p class="text-xs text-gray-400">No history loaded.</p>';
+
+            activeHistoryKey = eventId;
+
+            // Reuse existing verify function
+            await verify(eventId);
+        }
+
         function closeModal() {
             mCard.classList.remove('scale-100', 'opacity-100');
             mCard.classList.add('scale-95', 'opacity-0');
-            setTimeout(() => modal.classList.add('hidden'), 280);
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                // Reset state
+                modalState = 'batch-view';
+                currentBatchData = null;
+                currentEventId = null;
+            }, 280);
         }
 
         // Role switching functionality
@@ -635,6 +836,59 @@
         function getCurrentOrg() {
             return currentOrg;
         }
+
+        // Blockchain ledger display
+        async function loadRecentBlocks() {
+            try {
+                const res = await fetch('/api/ledger/recent');
+                const data = await res.json();
+                const chain = document.getElementById('chain-container');
+                const empty = document.getElementById('empty-state');
+
+                if (!data.blocks || data.blocks.length === 0) return;
+
+                if (empty) empty.remove();
+                chain.innerHTML = '';
+
+                data.blocks.forEach(b => {
+                    const node = document.createElement('div');
+                    node.className = 'chain-node';
+
+                    const card = document.createElement('div');
+                    card.className = 'block-card';
+                    card.style.cursor = 'pointer';
+                    card.onclick = () => {
+                        openBatchModal(b.batch_id);
+                    };
+
+                    card.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <span class="text-[10px] font-bold text-gray-400">#${b.block_number || '?'}</span>
+                            <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-[11px] font-semibold text-gray-700">${b.event_count} events</div>
+                            <div class="text-[9px] text-gray-400">${b.batch_id.substring(6, 16)}</div>
+                        </div>
+                        <div class="text-[8px] text-gray-400 font-mono">${b.tx_id ? b.tx_id.substring(0, 16) + '...' : 'N/A'}</div>
+                    `;
+
+                    const linkBefore = document.createElement('div');
+                    linkBefore.className = 'chain-link chain-link-before';
+
+                    node.appendChild(linkBefore);
+                    node.appendChild(card);
+                    chain.appendChild(node);
+                });
+            } catch (e) {
+                console.error('Failed to load blocks:', e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadRecentBlocks();
+            setInterval(loadRecentBlocks, 10000);
+        });
     </script>
 </body>
 

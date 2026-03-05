@@ -152,6 +152,9 @@ class MerkleBatchManager:
                             "proofLength": len(proofs[idx]),
                             "merkleRoot": merkle_root,
                             "batchSize": len(batch),
+                            "txId": tx_id,
+                            "blockNumber": block_number,
+                            "timestamp": int(time.time()),
                         }
                         event_json["_anchor"] = {
                             "txId": tx_id,
@@ -163,6 +166,39 @@ class MerkleBatchManager:
                         json_path.write_text(json.dumps(event_json, indent=2, ensure_ascii=False), encoding="utf-8")
                     except Exception as e:
                         print(f"[ERR] Failed to update receipt for {event_id}: {e}")
+
+            # Save batch file
+            try:
+                from datetime import datetime
+                batch_date = datetime.fromtimestamp(window_start).strftime("%Y-%m-%d")
+                batch_dir = Path(SETTINGS.evidence_dir) / "batches" / batch_date
+                batch_dir.mkdir(parents=True, exist_ok=True)
+
+                batch_file = batch_dir / f"{batch_id}.json"
+                batch_data = {
+                    "batch_id": batch_id,
+                    "camera_id": SETTINGS.camera_id,
+                    "merkle_root": merkle_root,
+                    "window_start": window_start,
+                    "window_end": window_end,
+                    "tx_id": tx_id,
+                    "block_number": block_number,
+                    "timestamp": int(time.time()),
+                    "event_count": len(batch),
+                    "events": [
+                        {
+                            "event_id": batch[i]["event_id"],
+                            "evidence_hash": event_hashes[i],
+                            "leaf_index": i,
+                            "proof": proofs[i],
+                        }
+                        for i in range(len(batch))
+                    ],
+                }
+                batch_file.write_text(json.dumps(batch_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                print(f"[BATCH] Saved batch file: {batch_file}")
+            except Exception as e:
+                print(f"[ERR] Failed to save batch file: {e}")
 
             print(f"[BATCH] Anchored batch={batch_id} events={len(batch)} tx={tx_id} block={block_number}")
 
