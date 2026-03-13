@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-03-13 (MinIO 分布式对象存储集成)
+
+### Added
+
+- **MinIO 存储服务** (`services/minio_storage.py`)
+  - `VideoStorage` 类：GOP 分片的分布式对象存储管理
+  - **性能优化设计**：
+    - 内存 CID 索引（`self._cid_index`）：O(1) 查找，避免遍历所有对象
+    - 时间戳路径编码（`{device_id}/t_{timestamp}/{cid}.h264`）：零额外网络请求的时间范围筛选
+    - 可选索引持久化（`save_cid_index` / `load_cid_index`）：进程重启后恢复索引
+  - 核心方法：
+    - `upload_gop(device_id, gop)` → CID：上传 GOP 分片，返回 SHA-256 CID
+    - `download_gop(device_id, cid)` → bytes：通过 CID 快速下载
+    - `list_gops(device_id, start_time, end_time)` → List[dict]：按时间范围列出 GOP
+    - `upload_json` / `download_json`：JSON 文件上传下载
+  - 自动创建 bucket（默认 `video-evidence`）
+  - 元数据存储：gop_id、timestamp、sha256_hash
+
+- **MinIO 配置** (`config.py`)
+  - 新增配置项：`minio_endpoint`、`minio_access_key`、`minio_secret_key`、`minio_bucket_name`、`minio_secure`
+  - 默认值：`localhost:9000`、`minioadmin/minioadmin`、bucket `video-evidence`
+  - 支持环境变量覆盖
+
+- **测试脚本** (`test_minio_storage.py`)
+  - 完整的上传/下载/验证流程
+  - SHA-256 一致性验证
+  - 内存索引性能测试
+  - 时间范围查询测试
+  - JSON 上传下载测试
+  - 索引持久化测试
+  - 性能指标统计（上传/下载时间）
+
+- **新增依赖** (`requirements.txt`)
+  - 添加 `minio`（MinIO Python SDK）
+
+### Technical Details
+
+- **对象路径格式**：`{device_id}/t_{timestamp_int}/{cid}.h264`
+  - 时间戳编码进路径，支持高效的时间范围筛选
+  - CID 使用 GOP 的 SHA-256 hash（由 `gop_splitter.py` 预计算）
+- **索引机制**：内存 dict 映射 CID → object_name，fallback 到遍历查找（兼容外部上传）
+- **并行存储**：与现有本地文件系统（`evidences/` 目录）并存，不影响现有逻辑
+
+### Notes
+
+- MinIO 需通过 Docker 启动：`docker run -p 9000:9000 -p 9001:9001 minio/minio server /data --console-address ":9001"`
+- 测试前需安装依赖：`pip install minio`
+- 运行测试：`python test_minio_storage.py --file <视频文件路径>`
+
+---
+
 ## 2026-03-13 (GOP 级别视频流切分模块)
 
 ### Added

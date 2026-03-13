@@ -126,6 +126,13 @@ class Settings:
     device_sign_algo: str
     device_signature_required: bool
 
+    # MinIO 对象存储
+    minio_endpoint: str
+    minio_access_key: str
+    minio_secret_key: str
+    minio_bucket_name: str
+    minio_secure: bool
+
 
 def load_settings() -> Settings:
     default_fabric_samples = str(Path.home() / "projects" / "fabric-samples")
@@ -174,6 +181,11 @@ def load_settings() -> Settings:
         device_key_path=Path(_env_str("DEVICE_KEY_PATH", "device_keys/default/key.pem")).expanduser().resolve(),
         device_sign_algo=_env_str("DEVICE_SIGN_ALGO", "ECDSA_SHA256"),
         device_signature_required=_env_bool("DEVICE_SIGNATURE_REQUIRED", True),
+        minio_endpoint=_env_str("MINIO_ENDPOINT", "localhost:9000"),
+        minio_access_key=_env_str("MINIO_ACCESS_KEY", "minioadmin"),
+        minio_secret_key=_env_str("MINIO_SECRET_KEY", "minioadmin"),
+        minio_bucket_name=_env_str("MINIO_BUCKET_NAME", "video-evidence"),
+        minio_secure=_env_bool("MINIO_SECURE", False),
     )
 
 
