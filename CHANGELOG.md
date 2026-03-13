@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-13 (GOP 级别视频流切分模块)
+
+### Added
+
+- **GOP 切分模块** (`services/gop_splitter.py`)
+  - `GOPData` 数据类：包含 `gop_id`、`raw_bytes`、`sha256_hash`、时间戳、`frame_count`、`byte_size`、`keyframe_frame`（BGR numpy array）
+  - `GOPSplitter` 类：后台守护线程持续从实时 CCTV 流读取 packet，按 GOP 边界切分，通过 `on_gop` 回调传出
+    - `start()` / `stop()` 控制生命周期
+    - 断线自动重连（3 秒间隔），`gop_id` 重连后接续不重置
+    - 根据 URL 协议动态设置 `av.open` options（RTSP 传 `rtsp_transport: tcp`，HTTP/HLS 不传）
+  - `split_gops()` 离线函数：用于本地 MP4 文件分析（调试/测试）
+  - **MJPEG intra-only 编码自动检测**：对 MJPEG 等每帧皆为关键帧的编码，按 `mjpeg_gop_size`（默认 25 帧 ≈ 1 秒）分组为逻辑 GOP；H.264/H.265 保持原有 keyframe 边界检测
+  - **关键帧归属机制**：遇到新 keyframe 时先 decode 存为 `pending_keyframe`，再用上一次的 `pending_keyframe` 封闭上一个 GOP，确保每个 GOP 的 `keyframe_frame` 是自己的 I 帧
+  - CLI 入口：`python -m services.gop_splitter [--stream URL | --file PATH] [--mjpeg-gop-size N]`
+  - PTS 为 None 的防御处理
+
+- **新增依赖** (`requirements.txt`)
+  - 添加 `av`（PyAV）用于 packet 级别视频流访问
+
+### Notes
+
+- 该模块与现有 `detection_service.py` 完全并行，不修改现有检测流程
+- `keyframe_frame` 输出为 BGR numpy array，下游可直接用于 pHash / YOLO，无需 JPEG 中转
+- SHA-256 可复现仅适用于离线 MP4 模式；HLS 流因服务器端重新封装，两次拉取同一段的哈希可能不同，属预期行为
+
+---
+
 ## 2026-03-05 (批次文件保存与恢复机制修复)
 
 ### Fixed
