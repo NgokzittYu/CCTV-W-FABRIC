@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-14 (Merkle Tree 类封装 + 序列化)
+
+### Added
+
+- **MerkleTree 类** (`services/merkle_utils.py`)
+  - `MerkleTree(leaves: List[str])`：从十六进制哈希列表构建完整 Merkle 树
+  - **Power-of-2 填充**：叶子数量不足 2 的幂次时，用最后一个叶子重复 padding
+  - `root: str`：根哈希（hex 字符串）
+  - `get_proof(leaf_index) -> List[dict]`：生成指定叶子的 Merkle Proof
+  - `verify_proof(leaf_hash, proof, root) -> bool`：静态方法，验证 proof 是否与 root 匹配
+  - `to_json() -> str`：序列化完整树结构为 JSON（含所有层级）
+  - `from_json(json_str) -> MerkleTree`：从 JSON 反序列化，无需重建树
+  - Proof 格式与现有 `apply_merkle_proof` 完全一致：`{"hash": hex, "position": "left"|"right"}`，position 表示 sibling 位置
+  - 纯标准库实现（hashlib + json），无第三方依赖
+
+- **MerkleTree 单元测试** (`tests/test_merkle_utils.py`)
+  - `test_merkle_tree_single_leaf` — 单叶子边界：root == 叶子，proof 为空
+  - `test_merkle_tree_two_leaves` — 双叶子：最简非平凡树
+  - `test_merkle_tree_four_leaves` — 4 叶子（2 的幂次），所有 proof 验证通过
+  - `test_merkle_tree_five_leaves_padding` — 5 叶子，验证 padding 到 8 + 所有 proof
+  - `test_merkle_tree_tampered_leaf` — 篡改叶子后验证失败
+  - `test_merkle_tree_json_roundtrip` — 6 叶子，序列化/反序列化往返一致
+
+- **集成测试** (`test_merkle_tree_integration.py`)
+  - 合成 7 个 GOP SHA-256 哈希构建 Merkle 树
+  - 逐 GOP 生成并验证 proof
+  - JSON 往返测试
+  - 篡改检测测试
+
+### Notes
+
+- 现有三个函数（`sha256_digest`、`build_merkle_root_and_proofs`、`apply_merkle_proof`）未做任何修改，下游调用方不受影响
+- `MerkleTree` 与现有函数的区别：预填充叶子到 2 的幂次（现有函数是逐层处理奇数节点），适用于需要完整树结构序列化的场景
+
+---
+
 ## 2026-03-13 (MinIO 分布式对象存储集成)
 
 ### Added
