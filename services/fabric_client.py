@@ -170,3 +170,49 @@ def get_fabric_config():
         "chaincode_name": SETTINGS.chaincode_name,
         "camera_id": SETTINGS.camera_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Anchor – GOP-level Merkle root anchoring
+# ---------------------------------------------------------------------------
+
+
+def submit_anchor(
+    env: Dict[str, str],
+    orderer_ca: Path,
+    org2_tls: Path,
+    channel: str,
+    chaincode: str,
+    epoch_id: str,
+    merkle_root: str,
+    timestamp: str,
+    device_count: int,
+) -> Dict[str, str]:
+    """Submit a GOP-level Merkle root anchor to the blockchain."""
+    args = [epoch_id, merkle_root, str(timestamp), str(device_count)]
+    return invoke_chaincode(
+        env, orderer_ca, org2_tls, channel, chaincode, "Anchor", args
+    )
+
+
+def query_anchor(
+    env: Dict[str, str],
+    channel: str,
+    chaincode: str,
+    epoch_id: str,
+) -> str:
+    """Query a single anchor record by epoch ID."""
+    return query_chaincode(env, channel, chaincode, "QueryAnchor", [epoch_id])
+
+
+def query_anchors_by_range(
+    env: Dict[str, str],
+    channel: str,
+    chaincode: str,
+    start_key: str,
+    end_key: str,
+) -> str:
+    """Query anchor records whose keys fall in [start_key, end_key)."""
+    return query_chaincode(
+        env, channel, chaincode, "QueryAnchorsByRange", [start_key, end_key]
+    )

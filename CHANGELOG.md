@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-14 (GOP 级别 Merkle 锚点上链)
+
+### Added
+
+- **Chaincode 锚点方法** (`chaincode/chaincode.go`)
+  - `AnchorRecord` 结构体：链上精简存储 `{EpochId, MerkleRoot, Timestamp, DeviceCount, GatewayId}`，不存 GOP 哈希列表
+  - `Anchor(epochId, merkleRoot, timestamp, deviceCount)` — 提交 GOP 级别 Merkle 根锚点
+    - GatewayId 从 `ctx.GetClientIdentity().GetID()` 的 SHA-256 截断前 8 字节派生（16 字符十六进制），防止客户端冒充身份
+    - 验证 MerkleRoot 为 64 字符合法十六进制
+    - 拒绝重复 epoch 提交
+    - 按 gateway 强制时间戳单调递增（防回退攻击）
+    - 触发 `AnchorEvent` 链上事件
+  - `QueryAnchor(epochId)` — 按 epoch ID 查询单条锚点
+  - `QueryAnchorsByRange(startKey, endKey)` — 范围查询，利用 `anchor:{epoch_id}` 键的字典序
+  - 新增常量：`anchorPrefix`、`anchorLastTsPrefix`
+  - 新增辅助函数：`deriveGatewayId()`、`anchorKey()`、`anchorLastTsKey()`
+
+- **Python 客户端函数** (`services/fabric_client.py`)
+  - `submit_anchor()` — 调用 chaincode `Anchor` 方法，复用现有 `invoke_chaincode()`
+  - `query_anchor()` — 调用 chaincode `QueryAnchor` 方法，复用现有 `query_chaincode()`
+  - `query_anchors_by_range()` — 调用 chaincode `QueryAnchorsByRange` 方法
+
+- **集成测试** (`tests/test_anchor_integration.py`)
+  - 提交+查询端到端验证（Merkle 根一致性）
+  - 重复 epoch 提交拒绝测试
+  - 时间戳回退拒绝测试
+  - 范围查询测试
+
+### Notes
+
+- 链上只存 MerkleRoot，GOP 哈希列表和完整 Merkle 树 JSON 存 MinIO，保持链上存储精简
+- GatewayId 不由客户端传入，从调用者 x509 证书身份派生
+- 键设计：`anchor:{epoch_id}` 直接作为存储 key，无需解析重建组���键
+- AnchorService（epoch 窗口管理、后台线程 flush）留到 Step 9 实现
+- 集成测试需要 Fabric test-network 运行：`python -m pytest tests/test_anchor_integration.py -v`
+
+---
+
 ## 2026-03-14 (Merkle Tree 类封装 + 序列化)
 
 ### Added

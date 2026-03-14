@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ const (
 	collectionRawEvidence = "collectionRawEvidence"
 	rawEvidenceHashPrefix = "rawhash:"
 	rectificationPrefix   = "rectify:"
+	anchorPrefix          = "anchor:"
+	anchorLastTsPrefix    = "anchor_last_ts:"
 )
 
 // EvidenceSmartContract provides functions for managing evidence assets.
@@ -122,6 +125,15 @@ type AuditTrail struct {
 	Batch          *MerkleBatch          `json:"batch"`
 	Events         []*Evidence           `json:"events"`
 	Rectifications []*RectificationOrder `json:"rectifications"`
+}
+
+// AnchorRecord stores one GOP-level Merkle root anchor on-chain (lean storage).
+type AnchorRecord struct {
+	EpochId     string `json:"epochId"`
+	MerkleRoot  string `json:"merkleRoot"`
+	Timestamp   int64  `json:"timestamp"`
+	DeviceCount int    `json:"deviceCount"`
+	GatewayId   string `json:"gatewayId"`
 }
 
 type ecdsaSignature struct {
@@ -1052,6 +1064,195 @@ func (s *EvidenceSmartContract) QueryOverdueOrders(ctx contractapi.TransactionCo
 	})
 
 	return overdue, nil
+}
+
+// ---------------------------------------------------------------------------
+// Anchor – GOP-level Merkle root anchoring
+// ---------------------------------------------------------------------------
+
+func anchorKey(epochId string) string {
+	return anchorPrefix + epochId
+}
+
+func anchorLastTsKey(gatewayId string) string {
+	return anchorLastTsPrefix + gatewayId
+}
+
+// deriveGatewayId produces a short, deterministic gateway identifier from the
+// caller's x509 identity (Subject+Issuer).  We SHA-256 the raw string and
+// keep the first 8 bytes → 16 hex characters.
+func deriveGatewayId(ctx contractapi.TransactionContextInterface) (string, error) {
+	ci := ctx.GetClientIdentity()
+	if ci == nil {
+		return "", fmt.Errorf("client identity is unavailable")
+	}
+	rawId, err := ci.GetID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get client ID: %v", err)
+	}
+	h := sha256.Sum256([]byte(rawId))
+	return hex.EncodeToString(h[:8]), nil
+}
+
+// Anchor submits a new GOP-level Merkle root to the ledger.
+// Parameters are passed as strings (Fabric convention).
+func (s *EvidenceSmartContract) Anchor(
+	ctx contractapi.TransactionContextInterface,
+	epochId string,
+	merkleRoot string,
+	timestampStr string,
+	deviceCountStr string,
+) error {
+	// --- access control ---
+	_, err := s.requireMSP(ctx, org1MSP, org2MSP)
+	if err != nil {
+		return err
+	}
+
+	// --- derive gateway id from caller identity ---
+	gatewayId, err := deriveGatewayId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// --- basic validation ---
+	epochId = strings.TrimSpace(epochId)
+	if epochId == "" {
+		return fmt.Errorf("epochId must not be empty")
+	}
+
+	merkleRoot = strings.TrimSpace(merkleRoot)
+	if len(merkleRoot) != 64 {
+		return fmt.Errorf("merkleRoot must be 64 hex characters, got %d", len(merkleRoot))
+	}
+	if _, err := hex.DecodeString(merkleRoot); err != nil {
+		return fmt.Errorf("merkleRoot is not valid hex: %v", err)
+	}
+
+	ts, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp: %v", err)
+	}
+
+	dc, err := strconv.Atoi(strings.TrimSpace(deviceCountStr))
+	if err != nil || dc < 0 {
+		return fmt.Errorf("invalid deviceCount: %v", err)
+	}
+
+	// --- duplicate check ---
+	key := anchorKey(epochId)
+	existing, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return fmt.Errorf("failed to read state: %v", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("anchor for epoch %s already exists", epochId)
+	}
+
+	// --- timestamp rollback check ---
+	lastTsKey := anchorLastTsKey(gatewayId)
+	lastTsBytes, err := ctx.GetStub().GetState(lastTsKey)
+	if err != nil {
+		return fmt.Errorf("failed to read last timestamp: %v", err)
+	}
+	if lastTsBytes != nil {
+		var lastTs int64
+		if err := json.Unmarshal(lastTsBytes, &lastTs); err == nil {
+			if ts <= lastTs {
+				return fmt.Errorf("timestamp rollback: provided %d <= last %d for gateway %s", ts, lastTs, gatewayId)
+			}
+		}
+	}
+
+	// --- persist anchor record ---
+	record := AnchorRecord{
+		EpochId:     epochId,
+		MerkleRoot:  merkleRoot,
+		Timestamp:   ts,
+		DeviceCount: dc,
+		GatewayId:   gatewayId,
+	}
+	recordJSON, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("failed to marshal anchor record: %v", err)
+	}
+	if err := ctx.GetStub().PutState(key, recordJSON); err != nil {
+		return fmt.Errorf("failed to put anchor state: %v", err)
+	}
+
+	// --- update last timestamp for this gateway ---
+	tsBytes, _ := json.Marshal(ts)
+	if err := ctx.GetStub().PutState(lastTsKey, tsBytes); err != nil {
+		return fmt.Errorf("failed to update last timestamp: %v", err)
+	}
+
+	// --- emit event ---
+	if err := ctx.GetStub().SetEvent("AnchorEvent", recordJSON); err != nil {
+		return fmt.Errorf("failed to set AnchorEvent: %v", err)
+	}
+
+	return nil
+}
+
+// QueryAnchor returns a single anchor record by epoch ID.
+func (s *EvidenceSmartContract) QueryAnchor(
+	ctx contractapi.TransactionContextInterface,
+	epochId string,
+) (*AnchorRecord, error) {
+	_, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP)
+	if err != nil {
+		return nil, err
+	}
+
+	epochId = strings.TrimSpace(epochId)
+	data, err := ctx.GetStub().GetState(anchorKey(epochId))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read anchor: %v", err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("anchor %s does not exist", epochId)
+	}
+
+	var record AnchorRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal anchor: %v", err)
+	}
+	return &record, nil
+}
+
+// QueryAnchorsByRange returns anchors whose keys fall in [startKey, endKey).
+// Callers typically pass prefixed keys, e.g.
+//
+//	QueryAnchorsByRange("anchor:epoch_gw01_", "anchor:epoch_gw01_\uffff")
+func (s *EvidenceSmartContract) QueryAnchorsByRange(
+	ctx contractapi.TransactionContextInterface,
+	startKey string,
+	endKey string,
+) ([]*AnchorRecord, error) {
+	_, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP)
+	if err != nil {
+		return nil, err
+	}
+
+	iter, err := ctx.GetStub().GetStateByRange(startKey, endKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get state by range: %v", err)
+	}
+	defer iter.Close()
+
+	var anchors []*AnchorRecord
+	for iter.HasNext() {
+		kv, err := iter.Next()
+		if err != nil {
+			return nil, fmt.Errorf("iterator error: %v", err)
+		}
+		var record AnchorRecord
+		if err := json.Unmarshal(kv.Value, &record); err != nil {
+			continue // skip malformed entries
+		}
+		anchors = append(anchors, &record)
+	}
+	return anchors, nil
 }
 
 func main() {
