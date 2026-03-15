@@ -79,6 +79,14 @@
 - Go 单元测试可独立运行：`cd chaincode && go test -v -run TestVerifyAnchor`
 - Python 集成测试：`pytest tests/test_gop_verification_e2e.py -v -s`
 
+### Fixed
+
+- **测试数据结构更新** (`tests/test_gop_verification_e2e.py`)
+  - 修复 `_create_synthetic_gop()` 函数缺少 `frame_count` 和 `keyframe_frame` 参数
+  - 添加 numpy 导入用于生成合成关键帧
+  - 生成 64x64 BGR 合成图像作为测试用关键帧
+  - 所有三个端到端测试现已通过
+
 ---
 
 ## 2026-03-14 (GOP 级别 Merkle 锚点上链)

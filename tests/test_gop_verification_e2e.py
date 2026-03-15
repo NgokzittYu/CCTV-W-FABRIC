@@ -14,6 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from services.fabric_client import build_fabric_env, submit_anchor
@@ -35,6 +36,10 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
     content = f"GOP_{gop_id}_".encode() + b"\x00" * (size - len(f"GOP_{gop_id}_"))
     sha256_hash = hashlib.sha256(content).hexdigest()
 
+    # Create synthetic keyframe (64x64 BGR image)
+    # Use gop_id to create deterministic but unique frames (modulo to prevent overflow)
+    keyframe = np.full((64, 64, 3), (gop_id * 10) % 256, dtype=np.uint8)
+
     return GOPData(
         gop_id=gop_id,
         start_time=float(1700000000 + gop_id * 2),
@@ -42,6 +47,8 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
         raw_bytes=content,
         byte_size=len(content),
         sha256_hash=sha256_hash,
+        frame_count=25,  # Standard GOP size
+        keyframe_frame=keyframe,
     )
 
 

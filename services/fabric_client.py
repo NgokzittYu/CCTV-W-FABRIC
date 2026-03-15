@@ -219,8 +219,8 @@ def verify_anchor(
 
     Args:
         env: Fabric environment variables
-        orderer_ca: Path to orderer CA certificate
-        org2_tls: Path to org2 TLS certificate
+        orderer_ca: Path to orderer CA certificate (not used for queries)
+        org2_tls: Path to org2 TLS certificate (not used for queries)
         channel: Channel name
         chaincode: Chaincode name
         epoch_id: Epoch ID of the anchor
@@ -231,10 +231,10 @@ def verify_anchor(
         JSON string with verification result
     """
     args = [epoch_id, leaf_hash, proof_json]
-    result = invoke_chaincode(
-        env, orderer_ca, org2_tls, channel, chaincode, "VerifyAnchor", args
-    )
-    return result.get("stdout", "").strip()
+    # Use query_chaincode instead of invoke_chaincode
+    # Verification is read-only and doesn't modify state
+    result = query_chaincode(env, channel, chaincode, "VerifyAnchor", args)
+    return result
 
 
 def query_anchors_by_range(
