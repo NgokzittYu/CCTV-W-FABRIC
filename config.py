@@ -133,6 +133,9 @@ class Settings:
     minio_bucket_name: str
     minio_secure: bool
 
+    # Perceptual hash verification
+    phash_hamming_threshold: int
+
 
 def load_settings() -> Settings:
     default_fabric_samples = str(Path.home() / "projects" / "fabric-samples")
@@ -186,6 +189,7 @@ def load_settings() -> Settings:
         minio_secret_key=_env_str("MINIO_SECRET_KEY", "minioadmin"),
         minio_bucket_name=_env_str("MINIO_BUCKET_NAME", "video-evidence"),
         minio_secure=_env_bool("MINIO_SECURE", False),
+        phash_hamming_threshold=_env_int("PHASH_HAMMING_THRESHOLD", 10),
     )
 
 

@@ -18,6 +18,8 @@ from typing import Callable, List, Optional
 import av
 import numpy as np
 
+from services.perceptual_hash import compute_phash
+
 # Codecs where every frame is an I-frame (no P/B frames)
 _INTRA_ONLY_CODECS = {"mjpeg", "rawvideo", "png", "bmp", "tiff"}
 
@@ -37,6 +39,7 @@ class GOPData:
     frame_count: int
     byte_size: int
     keyframe_frame: np.ndarray      # I-frame decoded as BGR numpy array
+    phash: Optional[str] = None     # perceptual hash of keyframe (hex string)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,7 @@ def _build_gop(
     keyframe_frame: np.ndarray,
 ) -> GOPData:
     raw = bytes(buf)
+    phash = compute_phash(keyframe_frame)
     return GOPData(
         gop_id=gop_id,
         raw_bytes=raw,
@@ -101,6 +105,7 @@ def _build_gop(
         frame_count=frame_count,
         byte_size=len(raw),
         keyframe_frame=keyframe_frame,
+        phash=phash,
     )
 
 

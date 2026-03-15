@@ -22,6 +22,8 @@ from services.gop_splitter import GOPData
 from services.merkle_utils import MerkleTree
 from services.minio_storage import VideoStorage
 from services.gop_verifier import GOPVerifier
+from services.perceptual_hash import compute_phash
+from services.tri_state_verifier import TriStateVerifier
 from config import SETTINGS
 
 
@@ -40,6 +42,9 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
     # Use gop_id to create deterministic but unique frames (modulo to prevent overflow)
     keyframe = np.full((64, 64, 3), (gop_id * 10) % 256, dtype=np.uint8)
 
+    # Compute pHash for the keyframe
+    phash = compute_phash(keyframe)
+
     return GOPData(
         gop_id=gop_id,
         start_time=float(1700000000 + gop_id * 2),
@@ -49,6 +54,7 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
         sha256_hash=sha256_hash,
         frame_count=25,  # Standard GOP size
         keyframe_frame=keyframe,
+        phash=phash,
     )
 
 
@@ -283,3 +289,65 @@ class TestGOPVerificationE2E:
         recomputed_hash = verification_result["details"]["recomputed_hash"]
         assert original_hash != recomputed_hash, \
             "Single byte change should produce different hash"
+
+
+def test_tri_state_intact(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+    """Test tri-state verification: INTACT case (no changes)."""
+    import cv2
+
+    # Create original GOP
+    gop = _create_synthetic_gop(1)
+    original_sha256 = gop.sha256_hash
+    original_phash = gop.phash
+
+    # Verify tri-state result
+    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
+    result = verifier.verify(original_sha256, original_phash, original_sha256, original_phash)
+
+    assert result == "INTACT", f"Expected INTACT for identical GOP, got {result}"
+
+
+def test_tri_state_re_encoded(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+    """Test tri-state verification: RE_ENCODED case (JPEG compression)."""
+    import cv2
+
+    # Create original GOP
+    gop = _create_synthetic_gop(1)
+    original_sha256 = gop.sha256_hash
+    original_phash = gop.phash
+
+    # Simulate JPEG re-encoding
+    _, encoded = cv2.imencode(".jpg", gop.keyframe_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    reencoded_frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    reencoded_sha256 = hashlib.sha256(reencoded_frame.tobytes()).hexdigest()
+    reencoded_phash = compute_phash(reencoded_frame)
+
+    # Verify tri-state result
+    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
+    result = verifier.verify(original_sha256, original_phash, reencoded_sha256, reencoded_phash)
+
+    assert result == "RE_ENCODED", f"Expected RE_ENCODED for JPEG compression, got {result}"
+
+
+def test_tri_state_tampered(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+    """Test tri-state verification: TAMPERED case (different content)."""
+    import cv2
+
+    # Create original GOP
+    gop1 = _create_synthetic_gop(1)
+    original_sha256 = gop1.sha256_hash
+    original_phash = gop1.phash
+
+    # Create completely different image with pattern (not solid color)
+    # Use random pattern to ensure different pHash
+    np.random.seed(999)
+    tampered_frame = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    tampered_sha256 = hashlib.sha256(tampered_frame.tobytes()).hexdigest()
+    tampered_phash = compute_phash(tampered_frame)
+
+    # Verify tri-state result
+    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
+    result = verifier.verify(original_sha256, original_phash, tampered_sha256, tampered_phash)
+
+    assert result == "TAMPERED", f"Expected TAMPERED for different content, got {result}"
+
