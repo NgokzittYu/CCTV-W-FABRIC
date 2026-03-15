@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-03-15 (GOP 验证功能)
+
+### Added
+
+- **Chaincode 验证方法** (`chaincode/chaincode.go`)
+  - `VerifyAnchor(epochId, leafHash, merkleProofJSON)` — 验证单个 GOP 完整性
+    - 从链上读取 `AnchorRecord` 获取 Merkle 根
+    - 解析 JSON 格式的 Merkle proof：`[{"hash": "hex", "position": "left"|"right"}]`
+    - 使用 proof 从 leafHash 重新计算 Merkle 根（关键：hex decode → bytes 拼接 → SHA-256）
+    - 比较计算根与链上根（不区分大小写）
+    - 返回 `{"status": "INTACT"}` 或 `{"status": "NOT_INTACT", "reason": "..."}`
+    - 要求 MSP 授权（org1MSP、org2MSP、org3MSP）
+  - 新增结构体：`MerkleProofStep` 用于 JSON 解析
+
+- **Chaincode 单元测试** (`chaincode/chaincode_test.go`)
+  - `TestVerifyAnchor_Success` — 完整 GOP 验证通过
+  - `TestVerifyAnchor_TamperedLeaf` — 篡改叶子哈希验证失败
+  - `TestVerifyAnchor_WrongProof` — 错误 proof 验证失败
+  - `TestVerifyAnchor_AnchorNotFound` — 锚点不存在返回 NOT_INTACT
+  - `TestVerifyAnchor_InvalidJSON` — 无效 JSON 格式返回错误
+  - 所有测试使用 mockStub 模式，无需真实 Fabric 网络
+
+- **Python 客户端函数** (`services/fabric_client.py`)
+  - `verify_anchor(env, channel, chaincode, epoch_id, leaf_hash, proof_json)` — 调用 chaincode `VerifyAnchor` 方法
+  - 复用现有 `invoke_chaincode()` 基础设施
+
+- **GOP 验证服务** (`services/gop_verifier.py`)
+  - `GOPVerifier` 类：端到端 GOP 验证编排
+  - `verify_gop(device_id, epoch_id, gop_index)` — 完整验证流程：
+    1. 从 MinIO 下载 Merkle 树 JSON：`{device_id}/merkle_tree_{epoch_id}.json`
+    2. 反序列化为 `MerkleTree` 对象
+    3. 从 `tree.original_leaves[gop_index]` 获取 CID
+    4. 从 MinIO 下载 GOP 文件：`storage.download_gop(device_id, cid)`
+    5. 重新计算 SHA-256 哈希
+    6. 生成 Merkle proof：`tree.get_proof(gop_index)`
+    7. 调用 `fabric_client.verify_anchor()` 链上验证
+    8. 返回详细结果：`{"status": "INTACT"|"NOT_INTACT", "details": {...}}`
+  - 错误处理：Merkle 树不存在时返回 "Anchor phase incomplete" 提示
+
+- **端到端集成测试** (`tests/test_gop_verification_e2e.py`)
+  - `test_gop_verification_intact` — 完整 GOP 验证返回 INTACT
+  - `test_gop_verification_tampered` — 完全替换 GOP 文件验证返回 NOT_INTACT
+  - `test_gop_verification_single_byte_tamper` — 单字节篡改验证返回 NOT_INTACT
+  - 测试覆盖完整流程：MinIO 存储 → Merkle 树构建 → 链上锚定 → 验证
+
+- **测试辅助工具**
+  - `test_verification.sh` — 自动化测试脚本，检查 Go 测试、Fabric 网络、MinIO 服务
+  - `MINIO_SETUP.md` — MinIO 设置故障排查指南
+
+### Technical Details
+
+- **哈希拼接顺序（关键）**：
+  - Go 和 Python 必须完全一致
+  - 流程：hex string → `hex.DecodeString()` → bytes 拼接 → `sha256.Sum256()` → hex encode
+  - `position="left"` 表示 sibling 在左侧：`hash(sibling_bytes + current_bytes)`
+  - `position="right"` 表示 sibling 在右侧：`hash(current_bytes + sibling_bytes)`
+  - **禁止直接拼接 hex string**，必须先解码为 bytes
+
+- **验证流程**：
+  ```
+  用户请求 → GOPVerifier.verify_gop()
+    ↓
+  1. 下载 Merkle 树 JSON (MinIO)
+  2. 下载 GOP 文件 (MinIO)
+  3. 计算 GOP SHA-256
+  4. 生成 Merkle proof
+  5. 调用 VerifyAnchor (Fabric)
+    ↓
+  返回 INTACT/NOT_INTACT
+  ```
+
+### Notes
+
+- 本功能不修改现有 `VerifyEvent` 方法，两者独立工作
+- GOP 验证依赖 Anchor 阶段已完成（Merkle 树已上传到 MinIO）
+- 集成测试需要 Fabric 网络和 MinIO 服务同时运行
+- Go 单元测试可独立运行：`cd chaincode && go test -v -run TestVerifyAnchor`
+- Python 集成测试：`pytest tests/test_gop_verification_e2e.py -v -s`
+
+---
+
 ## 2026-03-14 (GOP 级别 Merkle 锚点上链)
 
 ### Added

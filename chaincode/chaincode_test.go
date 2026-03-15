@@ -94,6 +94,15 @@ func (m *mockStub) GetTransient() (map[string][]byte, error) {
 	return out, nil
 }
 
+func (m *mockStub) SetEvent(name string, payload []byte) error {
+	if name == "" {
+		return fmt.Errorf("event name cannot be empty")
+	}
+	// In a real stub, this would set the chaincode event
+	// For testing, we just return nil to indicate success
+	return nil
+}
+
 // mockStateIterator implements shim.StateQueryIteratorInterface for testing.
 type mockStateIterator struct {
 	items []*queryresult.KV
@@ -559,5 +568,145 @@ func TestQueryOverdueOrders(t *testing.T) {
 	}
 	if overdue[0].ID != "order_overdue" {
 		t.Fatalf("expected order_overdue, got %s", overdue[0].ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VerifyAnchor Tests
+// ---------------------------------------------------------------------------
+
+func seedAnchor(t *testing.T, contract *EvidenceSmartContract, ctx contractapi.TransactionContextInterface, epochID string) (string, string, string, []MerkleProofStep, []MerkleProofStep) {
+	t.Helper()
+	leafA, leafB, root, proofA, proofB := buildTwoLeafTree()
+
+	err := contract.Anchor(ctx, epochID, root, "1700000000", "1")
+	if err != nil {
+		t.Fatalf("Anchor failed: %v", err)
+	}
+	return leafA, leafB, root, proofA, proofB
+}
+
+func TestVerifyAnchor_Success(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg1 := newTestContext(stub, org1MSP)
+
+	leafA, _, _, proofA, _ := seedAnchor(t, contract, ctxOrg1, "epoch_verify_success")
+
+	proofJSON, _ := json.Marshal(proofA)
+	ctxOrg3 := newTestContext(stub, org3MSP)
+	resultJSON, err := contract.VerifyAnchor(ctxOrg3, "epoch_verify_success", leafA, string(proofJSON))
+	if err != nil {
+		t.Fatalf("VerifyAnchor returned error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	if result["status"] != "INTACT" {
+		t.Fatalf("expected status INTACT, got %v", result["status"])
+	}
+}
+
+func TestVerifyAnchor_TamperedLeaf(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg1 := newTestContext(stub, org1MSP)
+
+	_, _, _, proofA, _ := seedAnchor(t, contract, ctxOrg1, "epoch_verify_tampered")
+
+	// Use a different leaf hash (tampered)
+	tamperedLeaf := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	proofJSON, _ := json.Marshal(proofA)
+	ctxOrg3 := newTestContext(stub, org3MSP)
+	resultJSON, err := contract.VerifyAnchor(ctxOrg3, "epoch_verify_tampered", tamperedLeaf, string(proofJSON))
+	if err != nil {
+		t.Fatalf("VerifyAnchor returned error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	if result["status"] != "NOT_INTACT" {
+		t.Fatalf("expected status NOT_INTACT, got %v", result["status"])
+	}
+	if result["reason"] != "computed root mismatch" {
+		t.Fatalf("expected reason 'computed root mismatch', got %v", result["reason"])
+	}
+}
+
+func TestVerifyAnchor_WrongProof(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg1 := newTestContext(stub, org1MSP)
+
+	leafA, _, _, _, proofB := seedAnchor(t, contract, ctxOrg1, "epoch_verify_wrong_proof")
+
+	// Use proof for leafB with leafA (wrong proof)
+	proofJSON, _ := json.Marshal(proofB)
+	ctxOrg3 := newTestContext(stub, org3MSP)
+	resultJSON, err := contract.VerifyAnchor(ctxOrg3, "epoch_verify_wrong_proof", leafA, string(proofJSON))
+	if err != nil {
+		t.Fatalf("VerifyAnchor returned error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	if result["status"] != "NOT_INTACT" {
+		t.Fatalf("expected status NOT_INTACT, got %v", result["status"])
+	}
+}
+
+func TestVerifyAnchor_AnchorNotFound(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg3 := newTestContext(stub, org3MSP)
+
+	leafA, _, _, proofA, _ := buildTwoLeafTree()
+	proofJSON, _ := json.Marshal(proofA)
+
+	resultJSON, err := contract.VerifyAnchor(ctxOrg3, "epoch_nonexistent", leafA, string(proofJSON))
+	if err != nil {
+		t.Fatalf("VerifyAnchor returned error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	if result["status"] != "NOT_INTACT" {
+		t.Fatalf("expected status NOT_INTACT, got %v", result["status"])
+	}
+	if result["reason"] != "anchor not found" {
+		t.Fatalf("expected reason 'anchor not found', got %v", result["reason"])
+	}
+}
+
+func TestVerifyAnchor_InvalidJSON(t *testing.T) {
+	contract := new(EvidenceSmartContract)
+	stub := newMockStub()
+	ctxOrg1 := newTestContext(stub, org1MSP)
+
+	leafA, _, _, _, _ := seedAnchor(t, contract, ctxOrg1, "epoch_verify_invalid_json")
+
+	// Invalid JSON proof
+	invalidProofJSON := "{invalid json"
+
+	ctxOrg3 := newTestContext(stub, org3MSP)
+	_, err := contract.VerifyAnchor(ctxOrg3, "epoch_verify_invalid_json", leafA, invalidProofJSON)
+	if err == nil {
+		t.Fatalf("expected error for invalid JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid merkle proof JSON") {
+		t.Fatalf("expected 'invalid merkle proof JSON' error, got: %v", err)
 	}
 }

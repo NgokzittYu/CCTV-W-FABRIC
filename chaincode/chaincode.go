@@ -646,6 +646,116 @@ func (s *EvidenceSmartContract) VerifyEvent(
 	return computedRoot == storedRoot, nil
 }
 
+// VerifyAnchor verifies a GOP hash against an anchored Merkle root using a Merkle proof.
+// Returns JSON with verification status.
+func (s *EvidenceSmartContract) VerifyAnchor(
+	ctx contractapi.TransactionContextInterface,
+	epochId string,
+	leafHash string,
+	merkleProofJSON string,
+) (string, error) {
+	// --- access control ---
+	if _, err := s.requireMSP(ctx, org1MSP, org2MSP, org3MSP); err != nil {
+		return "", err
+	}
+
+	// --- read anchor record ---
+	key := anchorKey(epochId)
+	anchorJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to read anchor %s: %v", epochId, err)
+	}
+	if anchorJSON == nil {
+		result := map[string]interface{}{
+			"status": "NOT_INTACT",
+			"reason": "anchor not found",
+		}
+		resultJSON, _ := json.Marshal(result)
+		return string(resultJSON), nil
+	}
+
+	var anchor AnchorRecord
+	if err := json.Unmarshal(anchorJSON, &anchor); err != nil {
+		return "", fmt.Errorf("failed to decode anchor %s: %v", epochId, err)
+	}
+
+	// --- validate inputs ---
+	leafHash = strings.ToLower(strings.TrimSpace(leafHash))
+	if leafHash == "" {
+		result := map[string]interface{}{
+			"status": "NOT_INTACT",
+			"reason": "empty leaf hash",
+		}
+		resultJSON, _ := json.Marshal(result)
+		return string(resultJSON), nil
+	}
+
+	storedRoot := strings.ToLower(strings.TrimSpace(anchor.MerkleRoot))
+	if storedRoot == "" {
+		result := map[string]interface{}{
+			"status": "NOT_INTACT",
+			"reason": "empty merkle root in anchor",
+		}
+		resultJSON, _ := json.Marshal(result)
+		return string(resultJSON), nil
+	}
+
+	// --- parse merkle proof ---
+	var proof []MerkleProofStep
+	if err := json.Unmarshal([]byte(merkleProofJSON), &proof); err != nil {
+		return "", fmt.Errorf("invalid merkle proof JSON: %v", err)
+	}
+
+	// --- compute root from leaf using proof ---
+	currentBytes, err := hex.DecodeString(leafHash)
+	if err != nil {
+		return "", fmt.Errorf("invalid leaf hash: %v", err)
+	}
+
+	for _, step := range proof {
+		siblingBytes, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(step.Hash)))
+		if err != nil {
+			return "", fmt.Errorf("invalid proof hash: %v", err)
+		}
+
+		var combined []byte
+		switch strings.ToLower(strings.TrimSpace(step.Position)) {
+		case "left":
+			combined = append(siblingBytes, currentBytes...)
+		case "right":
+			combined = append(currentBytes, siblingBytes...)
+		default:
+			return "", fmt.Errorf("invalid proof position: %s", step.Position)
+		}
+
+		hash := sha256.Sum256(combined)
+		currentBytes = hash[:]
+	}
+
+	computedRoot := strings.ToLower(hex.EncodeToString(currentBytes))
+
+	// --- compare roots ---
+	if computedRoot == storedRoot {
+		result := map[string]interface{}{
+			"status":     "INTACT",
+			"epochId":    epochId,
+			"leafHash":   leafHash,
+			"merkleRoot": storedRoot,
+		}
+		resultJSON, _ := json.Marshal(result)
+		return string(resultJSON), nil
+	}
+
+	result := map[string]interface{}{
+		"status":   "NOT_INTACT",
+		"reason":   "computed root mismatch",
+		"computed": computedRoot,
+		"expected": storedRoot,
+	}
+	resultJSON, _ := json.Marshal(result)
+	return string(resultJSON), nil
+}
+
 // PutRawEvidencePrivate stores raw evidence content in private data collection (Org1+Org2).
 func (s *EvidenceSmartContract) PutRawEvidencePrivate(
 	ctx contractapi.TransactionContextInterface,

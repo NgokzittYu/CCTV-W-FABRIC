@@ -205,6 +205,38 @@ def query_anchor(
     return query_chaincode(env, channel, chaincode, "QueryAnchor", [epoch_id])
 
 
+def verify_anchor(
+    env: Dict[str, str],
+    orderer_ca: Path,
+    org2_tls: Path,
+    channel: str,
+    chaincode: str,
+    epoch_id: str,
+    leaf_hash: str,
+    proof_json: str,
+) -> str:
+    """Verify a GOP hash against an anchored Merkle root using a Merkle proof.
+
+    Args:
+        env: Fabric environment variables
+        orderer_ca: Path to orderer CA certificate
+        org2_tls: Path to org2 TLS certificate
+        channel: Channel name
+        chaincode: Chaincode name
+        epoch_id: Epoch ID of the anchor
+        leaf_hash: SHA-256 hash of the GOP (hex string)
+        proof_json: JSON string of Merkle proof
+
+    Returns:
+        JSON string with verification result
+    """
+    args = [epoch_id, leaf_hash, proof_json]
+    result = invoke_chaincode(
+        env, orderer_ca, org2_tls, channel, chaincode, "VerifyAnchor", args
+    )
+    return result.get("stdout", "").strip()
+
+
 def query_anchors_by_range(
     env: Dict[str, str],
     channel: str,
