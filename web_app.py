@@ -7,15 +7,18 @@ from typing import Dict, List, Optional
 
 import cv2
 import torch
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from ultralytics import YOLO
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import SETTINGS
 from services.detection_service import MerkleBatchManager, start_detection_loop
 from services.fabric_client import build_fabric_env, get_fabric_config, query_chaincode
 from services.merkle_utils import apply_merkle_proof
+from services.gateway_service import GatewayService
 from services.workorder_service import (
     confirm_rectification,
     create_workorder,
@@ -58,6 +61,15 @@ video_source = SETTINGS.video_source
 
 # Ensure evidence dir exists
 EVIDENCE_DIR.mkdir(exist_ok=True)
+
+
+# Pydantic model for device report validation
+class DeviceReport(BaseModel):
+    device_id: str
+    segment_root: str
+    timestamp: str
+    semantic_summaries: list[str] = []
+    gop_count: int
 
 
 class ConnectionManager:
@@ -490,6 +502,61 @@ def api_get_config():
     return JSONResponse(get_fabric_config())
 
 
+# ============================================================================
+# Gateway Service Routes
+# ============================================================================
+
+@app.post("/report")
+async def receive_device_report(report: DeviceReport):
+    """Receive SegmentRoot report from edge device."""
+    await gateway_service.add_device_report(report.model_dump())
+    return {"status": "received", "device_id": report.device_id}
+
+
+@app.get("/epochs")
+async def list_epochs(limit: int = 20):
+    """List recent epochs for debugging and demo purposes."""
+    epochs = await asyncio.to_thread(gateway_service.list_epochs, limit)
+    return {"epochs": epochs}
+
+
+@app.get("/epoch/{epoch_id}")
+async def get_epoch_info(epoch_id: str):
+    """Get epoch aggregation details."""
+    epoch_data = await asyncio.to_thread(gateway_service.get_epoch, epoch_id)
+    if not epoch_data:
+        raise HTTPException(status_code=404, detail="Epoch not found")
+    return epoch_data
+
+
+@app.get("/proof/{epoch_id}/{device_id}")
+async def get_device_proof(epoch_id: str, device_id: str):
+    """Get Merkle proof for a device in an epoch."""
+    proof = await asyncio.to_thread(gateway_service.get_device_proof, epoch_id, device_id)
+    if not proof:
+        raise HTTPException(status_code=404, detail="Proof not found")
+    return proof
+
+
+# ============================================================================
+# Startup: Initialize Gateway Service and Scheduler
+# ============================================================================
+
+# Initialize gateway service
+fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+fabric_env, ORDERER_CA, ORG2_TLS = build_fabric_env(fabric_samples)
+
+gateway_service = GatewayService(
+    db_path="data/gateway.db",
+    fabric_config={
+        "env": fabric_env,
+        "orderer_ca": ORDERER_CA,
+        "org2_tls": ORG2_TLS,
+        "channel": CHANNEL_NAME,
+        "chaincode": CHAINCODE_NAME,
+    }
+)
+
 # Start detection loop in background
 merkle_manager = MerkleBatchManager(window_seconds=SETTINGS.merkle_batch_window_seconds)
 
@@ -516,6 +583,23 @@ detection_thread = threading.Thread(
     daemon=True,
 )
 detection_thread.start()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize scheduler on startup."""
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(gateway_service.flush_epoch, 'interval', seconds=30)
+    scheduler.start()
+    app.state.scheduler = scheduler
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup scheduler on shutdown."""
+    if hasattr(app.state, 'scheduler'):
+        app.state.scheduler.shutdown()
+
 
 if __name__ == "__main__":
     import uvicorn

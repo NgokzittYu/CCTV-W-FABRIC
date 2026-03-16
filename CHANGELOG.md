@@ -1,5 +1,113 @@
 # Changelog
 
+## 2026-03-16 (网关服务与跨设备时段聚合)
+
+### Added
+
+- **EpochMerkleTree 类** (`services/merkle_utils.py`)
+  - 跨设备 SegmentRoot 聚合到单个 EpochRoot
+  - 每个设备在每个时段贡献一个叶子节点（SegmentRoot）
+  - `DeviceSegment` 数据类：存储设备上报信息
+    - `device_id`: 设备标识符
+    - `segment_root`: 设备的 SegmentRoot 哈希
+    - `timestamp`: ISO 格式时间戳
+    - `semantic_summaries`: 语义摘要列表
+    - `gop_count`: GOP 数量
+  - `add_device_segment()` — 添加设备上报（自动去重，最后写入优先）
+  - `build_tree()` — 构建 Merkle 树并返回 EpochRoot
+  - `get_device_proof()` — 生成设备的 Merkle 证明
+  - `verify_device_proof()` — 验证设备证明
+  - `to_dict()`/`from_dict()` — 序列化/反序列化
+  - 确定性排序：设备按 device_id 排序以保证可重现的根哈希
+
+- **网关服务** (`services/gateway_service.py`)
+  - `GatewayService` 类：管理时段生命周期
+  - SQLite 数据库存储历史数据（`data/gateway.db`）
+  - 两张表：
+    - `epochs` — 时段记录（epoch_id, epoch_root, device_count, tx_id, created_at, tree_json）
+    - `device_reports` — 设备上报记录（id, epoch_id, device_id, segment_root, timestamp, gop_count, semantic_summaries）
+  - `add_device_report()` — 接收设备上报（异步，带锁保护）
+  - `flush_epoch()` — 每 30 秒触发：收集上报 → 构建树 → 锚定区块链 → 存储数据库
+  - `get_epoch()` — 查询时段详情
+  - `list_epochs()` — 列出最近时段
+  - `get_device_proof()` — 获取设备在时段中的 Merkle 证明
+  - 线程安全：使用 `asyncio.Lock` 保护并发访问
+  - 阻塞 I/O 优化：SQLite 和 Fabric 调用包装在 `asyncio.to_thread()` 中
+
+- **Web API 路由** (`web_app.py`)
+  - `POST /report` — 接收边缘设备的 SegmentRoot 上报
+  - `GET /epochs` — 列出最近的时段（用于调试和演示）
+  - `GET /epoch/{epoch_id}` — 获取时段详情
+  - `GET /proof/{epoch_id}/{device_id}` — 获取设备的 Merkle 证明
+  - `DeviceReport` Pydantic 模型用于请求验证
+  - APScheduler 定时任务：每 30 秒调用 `flush_epoch()`
+
+- **设备模拟器** (`gateway/simulate_devices.py`)
+  - 模拟 3 个边缘设备（cam_001, cam_002, cam_003）
+  - 每 10 秒向网关发送一次上报
+  - 随机生成 SegmentRoot 哈希和语义摘要
+  - 使用 httpx 异步 HTTP 客户端
+  - 支持 Ctrl+C 优雅退出
+
+- **单元测试** (`tests/test_epoch_merkle.py`)
+  - 11 个测试用例，覆盖 EpochMerkleTree 核心功能
+  - `test_basic_tree_construction` — 基本树构建
+  - `test_proof_generation_and_verification` — 证明生成和验证
+  - `test_serialization_deserialization` — 序列化/反序列化
+  - `test_deduplication` — 去重逻辑（同设备多次上报）
+  - `test_cannot_add_after_build` — 树构建后不能添加设备
+  - `test_empty_tree_error` — 空树错误处理
+  - `test_single_device` — 单设备场景
+  - `test_proof_for_nonexistent_device` — 不存在设备的证明请求
+  - `test_proof_before_build` — 树构建前请求证明
+  - `test_deterministic_ordering` — 确定性排序验证
+  - `test_large_tree` — 大型树性能测试（100 设备）
+
+- **文档** (`gateway/README.md` 和 `gateway/README_CN.md`)
+  - 架构说明和组件介绍
+  - 安装和使用指南
+  - API 接口示例
+  - 数据库结构说明
+  - 测试说明和故障排除
+  - 设计决策和未来增强
+
+### Changed
+
+- `web_app.py` 导入增强
+  - 添加 `HTTPException` 用于错误处理
+  - 添加 `BaseModel` 用于请求验证
+  - 添加 `AsyncIOScheduler` 用于定时任务
+  - 添加 `GatewayService` 导入
+
+### Design Decisions
+
+- **30 秒时段窗口** — 在区块链成本和数据新鲜度之间取得平衡
+- **最后写入优先去重** — 同一设备在同一时段多次上报时，保留最新的
+- **确定性排序** — 设备按 device_id 排序，确保相同设备集产生相同 EpochRoot
+- **与现有系统分离** — 网关服务是增量式的，不修改现有功能：
+  - `MerkleBatchManager` 继续处理事件级别批处理
+  - `HierarchicalMerkleTree` 继续处理设备内 GOP 聚合
+  - `EpochMerkleTree` 添加跨设备片段聚合
+- **线程安全** — 使用 `asyncio.Lock` 保护 API 处理器和调度器之间的并发访问
+- **非阻塞 I/O** — SQLite 和 Fabric 调用包装在线程池中，避免阻塞事件循环
+
+### Dependencies
+
+- `apscheduler` — 异步任务调度
+- `httpx` — 异步 HTTP 客户端（用于设备模拟器）
+
+### Notes
+
+- 网关服务是无状态的，除了 SQLite 持久化
+- 如果网关重启，内存中的待处理上报会丢失（30 秒窗口内可接受）
+- 生产环境建议添加：
+  - 设备上报的身份验证
+  - 每设备速率限制
+  - 缺失设备的监控/告警
+  - 数据库连接池
+  - 待处理上报的优雅关闭处理
+  - 时段可视化的 Web UI
+
 ## 2025-03-16 (语义指纹与组合验证)
 
 ### Added
