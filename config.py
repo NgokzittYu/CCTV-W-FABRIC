@@ -136,6 +136,10 @@ class Settings:
     # Perceptual hash verification
     phash_hamming_threshold: int
 
+    # Semantic fingerprint configuration
+    semantic_model_path: str
+    semantic_confidence: float
+
 
 def load_settings() -> Settings:
     default_fabric_samples = str(Path.home() / "projects" / "fabric-samples")
@@ -190,6 +194,8 @@ def load_settings() -> Settings:
         minio_bucket_name=_env_str("MINIO_BUCKET_NAME", "video-evidence"),
         minio_secure=_env_bool("MINIO_SECURE", False),
         phash_hamming_threshold=_env_int("PHASH_HAMMING_THRESHOLD", 10),
+        semantic_model_path=_env_str("SEMANTIC_MODEL_PATH", "yolov8n.pt"),
+        semantic_confidence=_env_float("SEMANTIC_CONFIDENCE", 0.5),
     )
 
 

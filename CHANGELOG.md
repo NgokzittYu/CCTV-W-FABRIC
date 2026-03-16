@@ -1,5 +1,145 @@
 # Changelog
 
+## 2025-03-16 (语义指纹与组合验证)
+
+### Added
+
+- **语义指纹服务** (`services/semantic_fingerprint.py`)
+  - `SemanticFingerprint` 数据类：存储 GOP 关键帧的语义内容
+    - `gop_id`: GOP 标识符
+    - `timestamp`: ISO 8601 格式时间戳
+    - `objects`: 对象计数字典（例如 `{"person": 3, "car": 2}`）
+    - `total_count`: 检测到的对象总数
+    - `json_str`: 确定性 JSON 字符串（键排序）
+    - `semantic_hash`: JSON 的 SHA-256 哈希值
+  - `SemanticExtractor` 类：使用 YOLOv8-nano 提取语义特征
+    - 单例模式 + 线程安全（延迟加载 YOLO 模型）
+    - `extract(keyframe_frame, gop_id, start_time)` — 从关键帧提取语义指纹
+    - 确定性 JSON 生成（相同输入 → 相同哈希）
+    - 优雅降级：提取失败返回 None，不影响 GOP 处理
+    - 错误处理：None 输入、空检测、模型失败均有处理
+
+- **GOP 切分器增强** (`services/gop_splitter.py`)
+  - `GOPData` 新增两个字段：
+    - `semantic_hash: Optional[str]` — 语义指纹哈希
+    - `semantic_fingerprint: Optional[SemanticFingerprint]` — 完整语义数据
+  - `_build_gop()` 函数自动提取语义指纹
+    - 在 pHash 计算后调用 `SemanticExtractor.extract()`
+    - 提取失败时优雅降级（字段为 None）
+    - 向后兼容：语义字段为可选，不影响现有 GOP
+
+- **Merkle 树增强** (`services/merkle_utils.py`)
+  - `compute_leaf_hash(sha256_hash, phash, semantic_hash)` — 组合叶子哈希函数
+    - 组合三个哈希：SHA-256（字节完整性）+ pHash（视觉相似性）+ semantic_hash（内容语义）
+    - 使用占位符处理 None 值（phash: "0"*16, semantic: "0"*64）
+    - 确保相同 GOP 始终产生相同叶子哈希
+    - 向后兼容：缺失字段使用占位符
+  - `build_merkle_root_and_proofs()` 支持 GOPData 对象
+    - 接受 `Union[List[str], List[GOPData]]` 参数
+    - GOPData 列表自动计算组合叶子哈希
+    - 字符串列表直接使用（向后兼容）
+  - `MerkleTree` 类支持 GOPData 初始化
+    - 构造函数接受 GOPData 列表或字符串列表
+    - 自动转换 GOPData 为组合叶子哈希
+
+- **MinIO 存储增强** (`services/minio_storage.py`)
+  - `upload_gop()` 自动上传语义 JSON 文件
+    - 检查 `gop.semantic_fingerprint` 是否存在
+    - 构建语义 JSON 数据（gop_id, timestamp, objects, total_count, semantic_hash）
+    - 上传到 GOP 分片同目录：`{device_id}/t_{timestamp}/{cid}_semantic.json`
+    - 与视频数据共同定位，便于管理
+
+- **配置增强** (`config.py`)
+  - 新增 `semantic_model_path: str` 配置项（默认 "yolov8n.pt"）
+  - 新增 `semantic_confidence: float` 配置项（默认 0.5）
+  - 支持环境变量：
+    - `SEMANTIC_MODEL_PATH` — YOLO 模型路径
+    - `SEMANTIC_CONFIDENCE` — 检测置信度阈值
+
+- **单元测试** (`tests/test_semantic_fingerprint.py`)
+  - 13 个测试用例，覆盖语义提取核心功能
+  - `test_singleton_pattern` — 单例模式验证
+  - `test_extract_with_synthetic_frame` — 合成帧提取测试
+  - `test_deterministic_json` — 确定性 JSON 生成
+  - `test_different_frames_different_hashes` — 不同帧产生不同哈希
+  - `test_empty_detection` — 空检测处理（无对象）
+  - `test_invalid_frame_*` — 错误输入处理（None、空数组、错误维度）
+  - `test_json_structure` — JSON 结构验证
+  - `test_timestamp_format` — ISO 8601 时间戳格式
+  - `test_thread_safety` — 并发提取线程安全测试
+
+- **单元测试扩展** (`tests/test_merkle_utils.py`)
+  - 7 个新测试用例，覆盖组合哈希功能
+  - `test_compute_leaf_hash_all_fields` — 所有字段提供
+  - `test_compute_leaf_hash_missing_phash` — phash 缺失（使用占位符）
+  - `test_compute_leaf_hash_missing_semantic` — semantic_hash 缺失
+  - `test_compute_leaf_hash_all_missing` — 所有可选字段缺失
+  - `test_compute_leaf_hash_deterministic` — 确定性验证
+  - `test_compute_leaf_hash_different_inputs` — 不同输入产生不同哈希
+  - `test_build_merkle_with_gopdata` — GOPData 对象支持
+  - `test_build_merkle_with_gopdata_missing_semantic` — 缺失语义哈希
+  - `test_build_merkle_backward_compatible` — 向后兼容性（字符串列表）
+
+- **集成测试扩展** (`tests/test_gop_verification_e2e.py`)
+  - 3 个新集成测试
+  - `test_semantic_fingerprint_upload` — 验证语义 JSON 上传到 MinIO
+    - 检查文件存在性
+    - 验证 JSON 结构（gop_id, timestamp, objects, total_count, semantic_hash）
+    - 验证语义哈希一致性
+  - `test_merkle_tree_with_semantic_hash` — 组合叶子哈希 Merkle 树构建
+    - 使用 GOPData 对象构建 Merkle 树
+    - 验证组合叶子哈希计算
+    - 验证 Merkle 证明
+  - `test_backward_compatibility_no_semantic` — 向后兼容性测试
+    - 无语义数据的 GOP 仍然有效
+    - 使用占位符构建 Merkle 树
+    - 验证证明仍然有效
+  - 更新 `_create_synthetic_gop()` 自动提取语义指纹
+
+### Technical Details
+
+- **语义指纹原理**：
+  - 使用 YOLOv8-nano 进行目标检测（轻量级，约 6MB）
+  - 提取关键帧中的对象类别和数量
+  - 生成确定性 JSON（键排序，无空格）
+  - 计算 SHA-256 哈希作为语义指纹
+  - 检测语义篡改（对象替换/移除）
+
+- **组合验证策略**：
+  - **SHA-256**：字节级完整性（检测任何修改）
+  - **pHash**：视觉相似性（容忍重编码）
+  - **semantic_hash**：内容语义（检测对象级篡改）
+  - 三重哈希组合为单个 Merkle 叶子
+  - 提供多层次验证能力
+
+- **性能考虑**：
+  - YOLOv8-nano 推理：每帧 50-150ms
+  - 模型延迟加载 + 单例复用
+  - GOP 切分可接受的延迟（非实时关键）
+  - 内存占用：模型约 6MB
+
+- **向后兼容性**：
+  - 语义字段为 Optional，默认 None
+  - 缺失字段使用固定占位符
+  - 现有 GOP 无需迁移
+  - 新旧锚点可共存
+
+### Changed
+
+- `GOPData` 数据类添加语义字段（向后兼容）
+- `build_merkle_root_and_proofs()` 支持 GOPData 对象输入
+- `MerkleTree` 构造函数支持 GOPData 列表
+- `upload_gop()` 自动上传语义 JSON（如果可用）
+
+### Notes
+
+- 语义提取失败不影响 GOP 处理（优雅降级）
+- 语义 JSON 存储在 GOP 分片同目录，便于管理
+- 仅新锚点使用组合叶子哈希，现有锚点保持不变
+- 所有测试通过（单元测试 + 集成测试）
+
+---
+
 ## 2026-03-15 (感知哈希与三态验证)
 
 ### Added

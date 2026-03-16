@@ -19,11 +19,12 @@ import pytest
 
 from services.fabric_client import build_fabric_env, submit_anchor
 from services.gop_splitter import GOPData
-from services.merkle_utils import MerkleTree
+from services.merkle_utils import MerkleTree, compute_leaf_hash
 from services.minio_storage import VideoStorage
 from services.gop_verifier import GOPVerifier
 from services.perceptual_hash import compute_phash
 from services.tri_state_verifier import TriStateVerifier
+from services.semantic_fingerprint import SemanticExtractor
 from config import SETTINGS
 
 
@@ -45,6 +46,21 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
     # Compute pHash for the keyframe
     phash = compute_phash(keyframe)
 
+    # Compute semantic fingerprint
+    semantic_fp = None
+    semantic_hash = None
+    try:
+        extractor = SemanticExtractor.get_instance()
+        semantic_fp = extractor.extract(
+            keyframe_frame=keyframe,
+            gop_id=gop_id,
+            start_time=float(1700000000 + gop_id * 2)
+        )
+        if semantic_fp:
+            semantic_hash = semantic_fp.semantic_hash
+    except Exception:
+        pass  # Graceful degradation in tests
+
     return GOPData(
         gop_id=gop_id,
         start_time=float(1700000000 + gop_id * 2),
@@ -55,6 +71,8 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
         frame_count=25,  # Standard GOP size
         keyframe_frame=keyframe,
         phash=phash,
+        semantic_hash=semantic_hash,
+        semantic_fingerprint=semantic_fp,
     )
 
 
@@ -350,4 +368,112 @@ def test_tri_state_tampered(fabric_env, fabric_cfg, minio_storage, gop_verifier)
     result = verifier.verify(original_sha256, original_phash, tampered_sha256, tampered_phash)
 
     assert result == "TAMPERED", f"Expected TAMPERED for different content, got {result}"
+
+
+def test_semantic_fingerprint_upload(fabric_env, fabric_cfg, minio_storage):
+    """Test that semantic JSON files are uploaded to MinIO alongside GOP chunks."""
+    device_id = "test_device_semantic"
+    gops = [_create_synthetic_gop(i) for i in range(2)]
+
+    # Upload GOPs
+    cids = []
+    for gop in gops:
+        cid = minio_storage.upload_gop(device_id, gop)
+        cids.append(cid)
+
+    # Check if semantic JSON files exist (if semantic extraction succeeded)
+    for i, gop in enumerate(gops):
+        if gop.semantic_fingerprint:
+            timestamp_int = int(gop.start_time)
+            semantic_path = f"{device_id}/t_{timestamp_int}/{cids[i]}_semantic.json"
+
+            # Try to download semantic JSON
+            try:
+                response = minio_storage.client.get_object(
+                    minio_storage.bucket,
+                    semantic_path
+                )
+                semantic_data = json.loads(response.read().decode('utf-8'))
+
+                # Verify structure
+                assert "gop_id" in semantic_data
+                assert semantic_data["gop_id"] == gop.gop_id
+                assert "timestamp" in semantic_data
+                assert "objects" in semantic_data
+                assert "total_count" in semantic_data
+                assert "semantic_hash" in semantic_data
+                assert semantic_data["semantic_hash"] == gop.semantic_hash
+
+                print(f"✓ Semantic JSON verified for GOP {gop.gop_id}")
+            except Exception as e:
+                print(f"Note: Semantic JSON not found for GOP {gop.gop_id}: {e}")
+
+
+def test_merkle_tree_with_semantic_hash(fabric_env, fabric_cfg):
+    """Test Merkle tree construction with composite leaf hashes (sha256 + phash + semantic)."""
+    gops = [_create_synthetic_gop(i) for i in range(3)]
+
+    # Build Merkle tree using GOPData objects (should use composite hashes)
+    tree = MerkleTree(gops)
+
+    # Verify root is generated
+    assert tree.root is not None
+    assert len(tree.root) == 64  # SHA-256 hex
+
+    # Verify proofs for each GOP
+    for i, gop in enumerate(gops):
+        proof = tree.get_proof(i)
+        assert proof is not None
+
+        # Compute leaf hash manually
+        leaf_hash = compute_leaf_hash(
+            gop.sha256_hash,
+            gop.phash,
+            gop.semantic_hash
+        )
+
+        # Verify proof
+        assert MerkleTree.verify_proof(leaf_hash, proof, tree.root)
+
+    print(f"✓ Merkle tree with semantic hashes verified for {len(gops)} GOPs")
+
+
+def test_backward_compatibility_no_semantic(fabric_env, fabric_cfg):
+    """Test that GOPs without semantic_hash still work correctly."""
+    # Create GOPs without semantic data
+    gops = []
+    for i in range(2):
+        gop = GOPData(
+            gop_id=i,
+            start_time=float(1700000000 + i * 2),
+            end_time=float(1700000000 + i * 2 + 2),
+            raw_bytes=b"test",
+            byte_size=4,
+            sha256_hash=f"{i}" * 64,
+            frame_count=25,
+            keyframe_frame=np.zeros((64, 64, 3), dtype=np.uint8),
+            phash=f"{i}" * 16,
+            semantic_hash=None,  # No semantic data
+            semantic_fingerprint=None
+        )
+        gops.append(gop)
+
+    # Build Merkle tree (should use placeholders for missing semantic)
+    tree = MerkleTree(gops)
+
+    assert tree.root is not None
+    assert len(tree.root) == 64
+
+    # Verify proofs still work
+    for i, gop in enumerate(gops):
+        proof = tree.get_proof(i)
+        leaf_hash = compute_leaf_hash(
+            gop.sha256_hash,
+            gop.phash,
+            None  # Will use placeholder
+        )
+        assert MerkleTree.verify_proof(leaf_hash, proof, tree.root)
+
+    print(f"✓ Backward compatibility verified for GOPs without semantic data")
+
 

@@ -95,6 +95,31 @@ class VideoStorage:
                 metadata=metadata
             )
 
+            # 上传语义 JSON（如果可用）
+            if gop.semantic_fingerprint:
+                semantic_filename = f"{cid}_semantic.json"
+                semantic_path = f"{device_id}/t_{timestamp_int}/{semantic_filename}"
+
+                # 构建语义 JSON 数据
+                semantic_data = {
+                    "gop_id": gop.semantic_fingerprint.gop_id,
+                    "timestamp": gop.semantic_fingerprint.timestamp,
+                    "objects": gop.semantic_fingerprint.objects,
+                    "total_count": gop.semantic_fingerprint.total_count,
+                    "semantic_hash": gop.semantic_fingerprint.semantic_hash
+                }
+
+                # 序列化并上传
+                semantic_json = json.dumps(semantic_data, indent=2)
+                self.client.put_object(
+                    self.bucket,
+                    semantic_path,
+                    io.BytesIO(semantic_json.encode('utf-8')),
+                    len(semantic_json),
+                    content_type='application/json'
+                )
+                logger.debug(f"Uploaded semantic JSON: {semantic_path}")
+
             # 记录到内存索引
             self._cid_index[cid] = object_name
 

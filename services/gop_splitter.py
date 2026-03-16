@@ -19,6 +19,7 @@ import av
 import numpy as np
 
 from services.perceptual_hash import compute_phash
+from services.semantic_fingerprint import SemanticExtractor, SemanticFingerprint
 
 # Codecs where every frame is an I-frame (no P/B frames)
 _INTRA_ONLY_CODECS = {"mjpeg", "rawvideo", "png", "bmp", "tiff"}
@@ -40,6 +41,8 @@ class GOPData:
     byte_size: int
     keyframe_frame: np.ndarray      # I-frame decoded as BGR numpy array
     phash: Optional[str] = None     # perceptual hash of keyframe (hex string)
+    semantic_hash: Optional[str] = None  # semantic fingerprint hash
+    semantic_fingerprint: Optional[SemanticFingerprint] = None  # full semantic data
 
 
 # ---------------------------------------------------------------------------
@@ -95,17 +98,36 @@ def _build_gop(
     keyframe_frame: np.ndarray,
 ) -> GOPData:
     raw = bytes(buf)
+    sha256_hash = hashlib.sha256(raw).hexdigest()
     phash = compute_phash(keyframe_frame)
+
+    # Compute semantic fingerprint
+    semantic_fp = None
+    semantic_hash = None
+    try:
+        extractor = SemanticExtractor.get_instance()
+        semantic_fp = extractor.extract(
+            keyframe_frame=keyframe_frame,
+            gop_id=gop_id,
+            start_time=start_ts
+        )
+        if semantic_fp:
+            semantic_hash = semantic_fp.semantic_hash
+    except Exception as e:
+        print(f"[GOP_SPLITTER] 警告：语义提取失败 GOP {gop_id}: {e}")
+
     return GOPData(
         gop_id=gop_id,
         raw_bytes=raw,
-        sha256_hash=hashlib.sha256(raw).hexdigest(),
+        sha256_hash=sha256_hash,
         start_time=start_ts,
         end_time=end_ts,
         frame_count=frame_count,
         byte_size=len(raw),
         keyframe_frame=keyframe_frame,
         phash=phash,
+        semantic_hash=semantic_hash,
+        semantic_fingerprint=semantic_fp,
     )
 
 
