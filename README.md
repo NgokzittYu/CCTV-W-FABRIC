@@ -73,34 +73,34 @@ flowchart TB
         A3["第三方审计接口"]
     end
 
-    subgraph L3["联盟链层 (Layer 3)"]
+    subgraph L3["联盟链层 Hyperledger Fabric"]
         C1["存证合约<br>Anchor()"]
-        C2["验证合约<br>Verify()"]
-        C3["审计合约<br>TamperAlert()"]
-        CD["链上数据：EpochRoot / 语义摘要 / 设备ID / 时间戳"]
+        C2["验证合约<br>VerifyAnchor() / VerifyEvent()"]
+        CD["链上数据：EpochRoot / MerkleRoot / 设备签名 / 时间戳"]
     end
 
-    subgraph L2["聚合网关层 (Layer 2)"]
-        GW["收集多台边缘设备的 SegmentRoot<br>→ 构建 EpochMerkleTree<br>批量聚合，降低上链频次（如每30s提交一次）"]
+    subgraph L2["聚合网关层 Gateway Service"]
+        GW["收集多台边缘设备的 SegmentRoot<br>→ 构建 EpochMerkleTree<br>批量聚合，每30秒提交一次 EpochRoot"]
     end
 
-    subgraph L1["边缘智能层 (Layer 1)"]
-        CAM["摄像头"] --> BOX["边缘AI盒子 (Edge AI Box)"]
-        BOX --> B1["① GOP切分 & 双哈希计算"]
-        BOX --> B2["② AI语义指纹提取"]
-        BOX --> B3["③ 分层Merkle树构建"]
-        BOX --> B4["④ 自适应锚定频率决策"]
+    subgraph L1["边缘智能层 Edge AI Box"]
+        CAM["摄像头 RTSP/HLS"] --> BOX["边缘AI盒子"]
+        BOX --> B1["① GOP切分 & 三重哈希<br>SHA256 + pHash + Semantic"]
+        BOX --> B2["② YOLOv8 语义指纹提取"]
+        BOX --> B3["③ 三级Merkle树构建<br>GOP → Chunk(30s) → Segment(5min)"]
+        BOX --> B4["④ 自适应锚定 EIS评分<br>LOW(5min) / MED(1min) / HIGH(10s)"]
     end
 
-    subgraph L0["分布式存储层 (Layer 0)"]
-        IPFS["IPFS / MinIO 集群（内容寻址存储）<br>视频分片存储，CID与链上记录关联"]
+    subgraph L0["分布式存储层"]
+        MINIO["MinIO 对象存储<br>视频分片 + 语义JSON + Merkle树结构<br>SHA-256内容寻址"]
     end
 
-    L4 -->|"查询 & 验证"| L3
-    L3 -->|"批量提交 EpochRoot"| L3
+    L4 -->|"查询 & 三态验证"| L3
+    L3 -->|"返回验证结果"| L4
     GW -->|"批量提交 EpochRoot"| L3
     L1 -->|"上报 SegmentRoot + 语义摘要"| L2
-    L1 -->|"视频流写入"| L0
+    L1 -->|"视频分片写入"| L0
+    L3 -->|"存储 Merkle Proof"| L0
 
     style L4 fill:#1a1a2e,stroke:#e94560,color:#fff
     style L3 fill:#16213e,stroke:#e94560,color:#fff
