@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-03-16 (自适应锚点模块)
+
+### Added
+
+- **AdaptiveAnchor 模块** (`services/adaptive_anchor.py`)
+  - 基于场景活动动态调整区块链锚点上报频率
+  - `AnchorDecision` 数据类：封装锚点决策结果
+    - `eis_score`: 事件重要性评分 (0.1/0.5/0.9)
+    - `smoothed_count`: 滑动窗口中位数平滑后的目标计数
+    - `level`: 当前活动等级 ("LOW"/"MEDIUM"/"HIGH")
+    - `report_interval_seconds`: 上报间隔 (300/60/10 秒)
+    - `should_report_now`: 是否应立即上报
+  - `AdaptiveAnchor` 类：核心自适应逻辑
+    - 滑动窗口中位数过滤（默认窗口大小 10）：抑制瞬时噪声
+    - 确认机制防抖：升级需 3 次确认，降级需 5 次确认
+    - 三级活动等级：
+      - LOW (EIS < 0.3): 5 分钟上报间隔
+      - MEDIUM (0.3 ≤ EIS ≤ 0.7): 1 分钟上报间隔
+      - HIGH (EIS > 0.7): 10 秒上报间隔
+    - 等级切换时自动重置计时器，触发立即上报
+  - EIS 计算规则：
+    - 0 个目标 → EIS = 0.1 (LOW)
+    - 1-5 个目标 → EIS = 0.5 (MEDIUM)
+    - 6+ 个目标 → EIS = 0.9 (HIGH)
+
+- **单元测试** (`tests/test_adaptive_anchor.py`)
+  - 15 个测试用例，100% 通过
+  - `test_initialization` — 初始状态验证
+  - `test_custom_parameters` — 自定义参数支持
+  - `test_eis_calculation_*` — EIS 计算逻辑（零/低/高计数）
+  - `test_level_transition_low_to_medium_to_high` — 完整等级转换流程
+  - `test_median_robustness_against_outliers` — 中位数抗噪声能力
+  - `test_fast_upgrade_3_confirmations` — 快速升级（3 次确认）
+  - `test_slow_downgrade_5_confirmations` — 缓慢降级（5 次确认）
+  - `test_report_interval_mapping` — 等级与上报间隔映射
+  - `test_should_report_now_timing` — 上报时机判断
+  - `test_should_report_now_after_level_change` — 等级切换后立即上报
+  - `test_sliding_window_behavior` — 滑动窗口行为
+  - `test_confirmation_reset_on_level_change` — 确认计数器逻辑
+  - `test_empty_window_initial_state` — 空窗口初始状态
+
+### Changed
+
+- 等级切换时重置 `_last_report_time` 为 0，确保立即触发上报
+- 测试用例修正：
+  - `test_report_interval_mapping`: 更新次数从 6 改为 7（满足 3 次确认）
+  - `test_should_report_now_timing`: 修正为检查首次更新
+  - `test_confirmation_reset_on_level_change`: 重写测试序列以匹配实际中位数计算
+
+### Technical Details
+
+- 使用 `collections.deque` 实现高效滑动窗口（O(1) 添加/删除）
+- 使用 `statistics.median` 计算中位数（对异常值鲁棒）
+- 状态机设计：`_current_level` + `_pending_level` + `_confirm_counter`
+- 时间管理：`time.time()` 单调时钟，独立于 GOP 时间戳
+
+---
+
 ## 2026-03-16 (网关服务与跨设备时段聚合)
 
 ### Added
