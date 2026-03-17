@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-17 (端到端篡改检测演示脚本)
+
+### Added
+
+- **篡改检测演示脚本** (`scripts/tamper_demo.py`)
+  - 端到端演示三种验证场景，适用于答辩展示
+  - **场景 1: INTACT** — 原始视频直接验证，所有 GOP 返回 INTACT + Merkle 证明通过
+  - **场景 2: RE_ENCODED** — FFmpeg 转码（改码率 500k），SHA-256 不匹配但 pHash 相似 → RE_ENCODED
+    - 转码参数：`-g 30 -keyint_min 30 -sc_threshold 0 -forced-idr 1` 确保 GOP 结构一致
+    - 时间戳最近邻匹配算法配对原始/转码 GOP（替代简单 zip），带重复使用检测警告
+  - **场景 3: TAMPERED** — 字节翻转 + 关键帧替换为随机噪声 → TAMPERED
+    - `HierarchicalMerkleTree.locate_tampered_gops()` 精确定位被篡改的 GOP 索引和时间范围
+    - 显式 `semantic_hash = "0"*64` 占位符处理
+  - 复用现有服务层：`split_gops`、`TriStateVerifier`、`MerkleTree`、`HierarchicalMerkleTree`、`VideoStorage`
+  - CLI 参数：`--video`（指定视频）、`--skip-minio`（跳过存储）、`--tamper-gop`（篡改目标）、`--hamming-threshold`
+  - 无视频时自动用 FFmpeg `testsrc2` 生成 10 秒动态测试视频（有移动色块，pHash 更有区分度）
+  - MinIO 可选（连接失败自动跳过），Fabric 始终模拟
+  - `rich` 库美化终端输出：彩色 Panel、Table、场景结果高亮
+  - `ScenarioResult` 数据类统一收集三场景结果
+  - 末尾一屏汇总 Panel：`✅ INTACT (9/9) | ⚠️ RE_ENCODED (9/9) | ❌ TAMPERED → GOP #2 定位成功`
+  - 总计时器显示演示耗时
+
+### Changed
+
+- **依赖更新** (`requirements.txt`)
+  - 新增 `rich>=13.0.0` — 终端美化输出库
+
 ## 2026-03-16 (自适应锚点模块)
 
 ### Added
