@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-23 (深度感知哈希升级)
+
+### Added
+
+- **深度感知哈希路径** (`services/perceptual_hash.py`)
+  - 新增 `PHASH_MODE=deep` 模式，使用 MobileNetV3-Small 提取 576 维深度特征
+  - 新增 `DeepPerceptualHasher`：模型延迟加载、自动选择 CPU/GPU、固定预处理流程
+  - 新增 `LSHCompressor`：使用固定 `seed=42` 的随机高斯投影，将深度特征压缩为 64-bit 十六进制字符串
+  - 新增投影矩阵持久化能力：`save_projection(filepath)` / `load_projection(filepath)`
+
+- **深度 pHash 单元测试** (`tests/test_deep_phash.py`)
+  - 覆盖确定性、输出格式、JPEG 压缩/缩放鲁棒性、篡改区分、转码模拟场景
+  - 使用 `PHASH_MODE` 在 legacy / deep 两种模式间切换，对比两种方案的汉明距离表现
+
+- **消融实验脚本** (`scripts/ablation_phash.py`)
+  - 对比 legacy pHash 与 deep pHash 在 `INTACT`、`RE_ENCODED`、`TAMPERED` 三种场景下的汉明距离分布
+  - 支持 FFmpeg 转码、GOP 对齐、统计汇总、终端表格输出和图像保存
+  - 输出柱状图和箱线图到 `results/ablation_phash/`
+
+### Changed
+
+- **感知哈希服务兼容升级** (`services/perceptual_hash.py`)
+  - `compute_phash(keyframe_frame)` 继续保持现有 `numpy` BGR 帧输入接口不变
+  - 默认 `PHASH_MODE=legacy`，继续使用原有 imagehash pHash 路径，保证下游调用方无需修改
+  - `hamming_distance(hash1, hash2)` 改为直接对 16 位十六进制字符串计算 64-bit 汉明距离，兼容 legacy 与 deep 两种输出
+
+- **依赖更新** (`requirements.txt`)
+  - 新增 `numpy`
+  - 新增 `torchvision>=0.15`
+  - 新增 `matplotlib`
+  - 新增 `tabulate`
+
+### Testing Results
+
+- `tests/test_perceptual_hash.py`: 11/11 通过
+- `tests/test_deep_phash.py`: 5/5 通过
+- `PHASH_MODE=deep python -m services.gop_splitter --file <local_video>` 端到端验证通过
+
 ## 2026-03-17 (端到端篡改检测演示脚本)
 
 ### Added
