@@ -1,5 +1,108 @@
 # Changelog
 
+## 2026-03-23 (完整版 EIS：光流 + 异常检测 + 规则引擎)
+
+### Added
+
+- **光流运动分析器** (`services/adaptive_anchor.py`)
+  - 新增 `OpticalFlowAnalyzer` 类：计算相邻 GOP 关键帧之间的稠密光流
+  - 使用 OpenCV `cv2.calcOpticalFlowFarneback()`，帧缩放至 320×240 降低 CPU 开销
+  - `MotionFeatures` 数据类：
+    - `magnitude_mean`: 光流幅值均值（整体运动强度）
+    - `magnitude_max`: 光流幅值最大值（最剧烈运动区域）
+    - `magnitude_std`: 光流幅值标准差（运动分布均匀性）
+    - `motion_area_ratio`: 运动区域占比（幅值 > 2.0 像素的比例）
+    - `dominant_direction`: 主运动方向角度（0-360°，加权平均）
+  - 内部缓存上一帧灰度图，首帧返回全零特征
+
+- **统计异常检测器** (`services/adaptive_anchor.py`)
+  - 新增 `AnomalyDetector` 类：基于滑动窗口的多维 z-score 异常检测
+  - 纯 numpy 实现，无 sklearn 依赖
+  - 4 维特征向量：[total_count, magnitude_mean, magnitude_max, motion_area_ratio]
+  - 冷启动保护：历史 < 10 个样本时返回 anomaly_score=0.0
+  - `AnomalyResult` 数据类：
+    - `anomaly_score`: 0.0~1.0 归一化异常分数（`min(1.0, max_z / (2 * threshold))`）
+    - `is_anomaly`: 最大 z-score 是否超过阈值（默认 2.5）
+    - `z_scores`: 各维度 z-score 列表（供调试）
+
+- **EIS 规则引擎** (`services/adaptive_anchor.py`)
+  - 新增 `EISRuleEngine` 类：多信号加权融合 + 规则覆盖
+  - 默认权重：object_count=0.35, motion=0.35, anomaly=0.30
+  - 目标计数信号：4 级映射（0→0.1, 1-3→0.3, 4-8→0.6, 9+→0.9）+ person≥3 奖励 +0.1
+  - 运动信号：4 级映射（<1→0.1, 1-5→0.4, 5-15→0.7, 15+→0.95）+ 高面积覆盖覆盖
+  - 规则覆盖：异常→EIS≥0.8，疑似遮挡（area>0.9 且 mag>20）→EIS=0.95
+
+- **EIS_MODE 双模式切换** (`services/adaptive_anchor.py`)
+  - `AdaptiveAnchor.__init__` 新增 `eis_mode` 参数，默认读取环境变量 `EIS_MODE`
+  - `EIS_MODE=lite`（默认）：原有纯 YOLO 计数逻辑，完全向后兼容
+  - `EIS_MODE=full`：光流 → 异常检测 → 规则引擎 → 滑动窗口平滑 → 防抖
+  - `AdaptiveAnchor.update()` 新增可选参数 `keyframe: Optional[np.ndarray] = None`
+  - `AnchorDecision` 新增可选字段：
+    - `motion_features: Optional[MotionFeatures]`（仅 full 模式）
+    - `anomaly_result: Optional[AnomalyResult]`（仅 full 模式）
+    - `signal_breakdown: Optional[dict]`（各信号分量，如 `{"object": 0.6, "motion": 0.7, "anomaly": 0.3}`）
+
+- **完整版 EIS 单元测试** (`tests/test_full_eis.py`)
+  - 18 个测试用例，覆盖 5 个测试类：
+  - `TestOpticalFlowAnalyzer`（3 个）：首帧全零、静态帧近零、运动帧检测
+  - `TestAnomalyDetector`（3 个）：冷启动保护、正常→异常检测、z-score 维度
+  - `TestEISRuleEngine`（6 个）：低/高活跃度、异常覆盖、遮挡覆盖、person 奖励、值域钳制
+  - `TestFullEISIntegration`（2 个）：静态→活跃状态转换、signal_breakdown 输出
+  - `TestBackwardCompatibility`（4 个）：lite 默认行为、忽略 keyframe、EIS 三级值、升降级时序
+
+- **EIS 消融实验脚本** (`scripts/ablation_eis.py`)
+  - 对比 lite 与 full EIS 在真实视频上的表现
+  - 输入：`--video` 单视频或 `--video-dir` 批量处理
+  - 输出 3 张对比图（保存到 `results/ablation_eis/`）：
+    - 双折线图：lite EIS vs full EIS 随时间变化
+    - 信号分量堆叠面积图（object / motion / anomaly）
+    - LOW/MEDIUM/HIGH 状态切换时间线
+  - 统计输出：各状态时间占比、状态切换次数、平均上报间隔
+  - rich 库美化终端输出 + tabulate 对比表
+
+### Changed
+
+- **AdaptiveAnchor 接口扩展** (`services/adaptive_anchor.py`)
+  - `__init__` 新增 `eis_mode` 参数（向后兼容，默认 "lite"）
+  - `update()` 新增 `keyframe` 参数（向后兼容，默认 None）
+  - `AnchorDecision` 新增 3 个 Optional 字段（向后兼容，默认 None）
+  - 新增 `import cv2, math, os` 及 `import numpy as np`
+
+### Technical Details
+
+- **光流计算优化**：
+  - 帧缩放至 320×240（实测 Farneback 单帧 ~5-10ms CPU）
+  - 参数：pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigma=1.2
+  - 运动区域阈值：像素位移 > 2.0 视为运动
+  - 主方向计算：幅值加权的角度均值（处理角度环绕）
+
+- **异常检测设计**：
+  - 滑动窗口最大 100 个历史样本
+  - 冷启动期 10 个 GOP（约 30-60 秒视频），期间不报异常
+  - 归一化公式：`score = min(1.0, max_z / (2 * z_threshold))`
+  - 系统重启后需重新积累基线（内存窗口不持久化）
+
+- **融合策略**：
+  - 加权融合：`eis = 0.35*obj + 0.35*motion + 0.30*anomaly`
+  - 规则覆盖优先级最高（anomaly → ≥0.8，suspected occlusion → 0.95）
+  - 最终 EIS 经滑动窗口中位数平滑 + 快升慢降防抖（复用 lite 模式逻辑）
+
+### Testing Results
+
+- `tests/test_adaptive_anchor.py`（lite 模式）: 15/15 通过 ✅
+- `tests/test_full_eis.py`（full 模式）: 18/18 通过 ✅
+- 端到端验证：34 个 GOP 视频处理成功 ✅
+- 消融实验：lite vs full 对比图生成成功 ✅
+
+### Notes
+
+- 无需新增依赖：opencv-python、numpy、matplotlib、tabulate、rich 均已存在
+- 光流分析器按 GOP 顺序调用，不支持乱序或并发（与 lite 模式一致）
+- 权重和阈值为初始值，可通过消融实验调参
+- 所有魔法数字集中在类 `__init__` 参数或模块顶部常量中
+
+---
+
 ## 2026-03-23 (深度感知哈希升级)
 
 ### Added
