@@ -16,36 +16,33 @@ def sha256_digest(data: bytes) -> bytes:
 def compute_leaf_hash(
     sha256_hash: str,
     phash: Optional[str] = None,
-    semantic_hash: Optional[str] = None
+    semantic_hash: Optional[str] = None,
+    vif: Optional[str] = None,
 ) -> str:
     """
     计算组合 Merkle 叶子哈希。
 
-    组合三个哈希：SHA-256（字节完整性）+ pHash（视觉相似性）+
-    semantic_hash（内容语义）为单个叶子哈希。
-
-    使用固定占位符处理 None 值，确保叶子结构一致性：
-    - phash 缺失 → 用 "0" * 16（64-bit pHash）
-    - semantic_hash 缺失 → 用 "0" * 64（256-bit SHA-256）
-
-    这保证了相同 GOP 始终产生相同的叶子哈希，无论语义提取是否成功。
+    当 vif 不为 None 时，使用 VIF 替代 phash + semantic_hash 作为感知标识组件。
+    当 vif 为 None 时，行为与原来完全一致（向后兼容）。
 
     Args:
         sha256_hash: GOP 原始字节 SHA-256（必需）
         phash: 感知哈希（可选，16 字符十六进制）
         semantic_hash: 语义指纹哈希（可选，64 字符十六进制）
+        vif: 多模态融合指纹（可选，固定长度十六进制）
 
     Returns:
-        SHA-256(sha256 + phash + semantic) 的十六进制字符串
+        SHA-256 的十六进制字符串
     """
-    # 使用占位符处理 None 值，保持结构一致
-    phash_str = phash if phash else "0" * 16
-    semantic_str = semantic_hash if semantic_hash else "0" * 64
+    if vif is not None:
+        # VIF 模式：sha256 + vif
+        combined = sha256_hash + vif
+    else:
+        # 传统模式：sha256 + phash + semantic_hash
+        phash_str = phash if phash else "0" * 16
+        semantic_str = semantic_hash if semantic_hash else "0" * 64
+        combined = sha256_hash + phash_str + semantic_str
 
-    # 拼接三个哈希
-    combined = sha256_hash + phash_str + semantic_str
-
-    # 对拼接字符串计算哈希
     return hashlib.sha256(combined.encode('utf-8')).hexdigest()
 
 
@@ -72,7 +69,8 @@ def build_merkle_root_and_proofs(
             compute_leaf_hash(
                 gop.sha256_hash,
                 gop.phash,
-                gop.semantic_hash
+                gop.semantic_hash,
+                getattr(gop, 'vif', None),
             )
             for gop in leaves
         ]
@@ -151,7 +149,8 @@ class MerkleTree:
                 compute_leaf_hash(
                     gop.sha256_hash,
                     gop.phash,
-                    gop.semantic_hash
+                    gop.semantic_hash,
+                    getattr(gop, 'vif', None),
                 )
                 for gop in leaves
             ]

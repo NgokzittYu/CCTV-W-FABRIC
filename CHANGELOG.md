@@ -1,5 +1,92 @@
 # Changelog
 
+## 2026-03-23 (多模态融合 VIF 视频完整性指纹)
+
+### Added
+
+- **VIF 核心模块** (`services/vif.py`)
+  - `VIFConfig` 数据类：从 `VIF_MODE` 环境变量读取模式（`off`/`phash_only`/`semantic_only`/`fusion`，默认 `off`）
+    - 权重支持环境变量覆盖：`VIF_PHASH_WEIGHT`（默认 0.4）、`VIF_SEMANTIC_WEIGHT`（默认 0.35）、`VIF_TEMPORAL_WEIGHT`（默认 0.25）
+    - `output_length=256` 位（输出 64 字符十六进制字符串）
+  - `extract_phash_feature(frame) -> np.ndarray`：复用 `DeepPerceptualHasher` 提取 MobileNetV3-Small **pool 后** 576 维特征向量
+  - `extract_semantic_feature(frame) -> np.ndarray`：独立的 `_SemanticFeatureExtractor` 单例
+    - 使用 MobileNetV3-Small **pool 前** `features` 层提取空间特征图
+    - 全局平均池化 (GAP) → 截断/填充到 576 维 → L2 归一化
+    - 与 phash 分支使用不同层特征，确保两个模态真正互补
+  - `extract_temporal_feature(gop_frames) -> np.ndarray`：帧间稠密光流统计特征
+    - 使用 OpenCV `cv2.calcOpticalFlowFarneback()` 计算相邻帧光流
+    - 每对帧提取 4 个统计量：mean_magnitude, mean_angle, std_magnitude, std_angle
+    - 最多 24 对帧 → 96 维固定长度向量
+    - 单帧输入优雅退化为零向量（graceful degradation）
+  - `_VIFLSHProjector`：VIF 专用 LSH 投影器
+    - 固定种子（2026）随机高斯投影矩阵，确保确定性
+    - 加权拼接三模态特征 → 投影到 256 位 → 十六进制字符串
+  - `compute_vif(gop_frames, config) -> Optional[str]`：主入口函数
+    - `off` → 返回 None（调用方回退传统 pHash）
+    - `phash_only` → 仅感知哈希特征 → LSH 256 位
+    - `semantic_only` → 仅语义特征 → LSH 256 位
+    - `fusion` → 三模态加权融合
+
+- **VIF 单元测试** (`tests/test_vif.py`)
+  - 32 个测试用例，覆盖 8 个测试类：
+  - `TestVIFConfig`（4 个）：默认模式、环境变量读取、权重覆盖、输出长度
+  - `TestPhashFeature`（3 个）：输出维度、确定性、无效输入回退
+  - `TestSemanticFeature`（4 个）：输出维度、L2 归一化、确定性、无效输入
+  - `TestTemporalFeature`（5 个）：输出维度、单帧退化、None 处理、多帧非零、确定性
+  - `TestComputeVIF`（6 个）：off/phash_only/semantic_only/fusion 格式、未知模式、空帧
+  - `TestVIFStability`（3 个）：三模式稳定性（同输入→同输出）
+  - `TestVIFDiscrimination`（3 个）：三模式区分度（不同输入→汉明距离 > 10）
+  - `TestVIFMerkleCompatibility`（4 个）：叶子哈希、VIF 与传统差异、Merkle 树构建验证、向后兼容
+
+### Changed
+
+- **GOPData 数据类扩展** (`services/gop_splitter.py`)
+  - 新增 `vif: Optional[str] = None` 字段
+  - `_build_gop()` 新增 `extra_frames` 可选参数，支持多帧传入
+  - 当 `VIF_MODE != "off"` 时自动调用 `compute_vif()` 计算 VIF
+  - VIF 计算失败时优雅降级（打印警告，字段为 None）
+
+- **Merkle 叶子哈希增强** (`services/merkle_utils.py`)
+  - `compute_leaf_hash()` 新增可选参数 `vif: Optional[str] = None`
+  - VIF 不为 None 时，替代 `phash + semantic_hash` 作为感知标识组件：`SHA-256(sha256_hash + vif)`
+  - VIF 为 None 时行为不变（完全向后兼容）
+  - `build_merkle_root_and_proofs()` 和 `MerkleTree` 构造函数自动传递 `gop.vif`
+
+### Technical Details
+
+- **三模态特征设计**：
+  - phash 分支：MobileNetV3-Small `classifier=Identity()` 输出（pool 后，576 维）
+  - semantic 分支：MobileNetV3-Small `features` 层输出（pool 前，经 GAP 后截断到 576 维）
+  - temporal 分支：Farneback 稠密光流，参数 pyr_scale=0.5, levels=3, winsize=15, iterations=3
+  - 两个 CNN 分支使用同一模型架构的不同层，提取互补特征
+
+- **LSH 投影**：
+  - 输入维度：576 + 576 + 96 = 1248（fusion 模式）
+  - 加权后拼接 → 256 × 1248 随机投影矩阵 → 256 位二进制 → 64 字符十六进制
+  - 使用 `np.errstate` 抑制边界浮点警告（与 `perceptual_hash.py` 一致）
+
+- **向后兼容性**：
+  - `VIF_MODE=off`（默认）时无任何行为变化
+  - 现有 `compute_leaf_hash` 调用无需修改
+  - 所有现有测试在默认配置下通过
+
+### Testing Results
+
+- `tests/test_vif.py`（VIF_MODE=fusion）: 32/32 通过 ✅
+- `tests/test_perceptual_hash.py`: 11/11 通过 ✅
+- `tests/test_merkle_utils.py`: 20/20 通过 ✅
+- `tests/test_hierarchical_merkle.py`: 11/11 通过 ✅
+- `tests/test_gop_verification_e2e.py`: 7 errors（MinIO 连接，历史遗留）
+
+### Notes
+
+- 无需新增依赖：torch、torchvision、opencv-python、numpy 均已存在
+- 权重和输出长度可通过环境变量调参，方便论文消融实验
+- 单帧场景下 temporal 分支退化为零向量，fusion 模式仍有 phash + semantic 两个有效维度
+- `_SemanticFeatureExtractor` 与 `DeepPerceptualHasher` 为独立单例，避免模型冲突
+
+---
+
 ## 2026-03-23 (完整版 EIS：光流 + 异常检测 + 规则引擎)
 
 ### Added

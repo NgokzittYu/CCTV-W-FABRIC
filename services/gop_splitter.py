@@ -43,6 +43,7 @@ class GOPData:
     phash: Optional[str] = None     # perceptual hash of keyframe (hex string)
     semantic_hash: Optional[str] = None  # semantic fingerprint hash
     semantic_fingerprint: Optional[SemanticFingerprint] = None  # full semantic data
+    vif: Optional[str] = None        # multi-modal fusion fingerprint (VIF)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +98,7 @@ def _build_gop(
     end_ts: float,
     frame_count: int,
     keyframe_frame: np.ndarray,
+    extra_frames: Optional[List[np.ndarray]] = None,
 ) -> GOPData:
     raw = bytes(buf)
     sha256_hash = hashlib.sha256(raw).hexdigest()
@@ -117,6 +119,19 @@ def _build_gop(
     except Exception as e:
         print(f"[GOP_SPLITTER] 警告：语义提取失败 GOP {gop_id}: {e}")
 
+    # Compute VIF (multi-modal fusion fingerprint)
+    vif_str = None
+    try:
+        from services.vif import VIFConfig, compute_vif
+        vif_config = VIFConfig()
+        if vif_config.mode != "off":
+            gop_frames = [keyframe_frame]
+            if extra_frames:
+                gop_frames.extend(extra_frames)
+            vif_str = compute_vif(gop_frames, vif_config)
+    except Exception as e:
+        print(f"[GOP_SPLITTER] 警告：VIF 计算失败 GOP {gop_id}: {e}")
+
     return GOPData(
         gop_id=gop_id,
         raw_bytes=raw,
@@ -129,6 +144,7 @@ def _build_gop(
         phash=phash,
         semantic_hash=semantic_hash,
         semantic_fingerprint=semantic_fp,
+        vif=vif_str,
     )
 
 
