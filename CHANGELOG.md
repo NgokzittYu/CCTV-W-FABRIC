@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-03-23 (E2E Benchmark 框架)
+
+### Added
+
+- **Benchmark 基础设施** (`benchmarks/`)
+  - `config.py`：分辨率/轮次/并发/篡改类型等参数管理
+  - `metrics.py`：LatencyStats (P50/P95/P99) + ThroughputStats + ClassificationMetrics (TPR/FPR/F1) + ResourceSnapshot
+  - `runner.py`：CLI 运行器，支持多轮 warmup、JSON 持久化
+  - `datasets.py`：合成数据生成 + 5 种篡改类型（帧替换/内容叠加/时间偏移/重压缩/噪声注入）
+
+- **Baselines** (`benchmarks/baselines/`)
+  - `naive_hash.py`：纯 SHA-256 检测（baseline，高 FPR）
+  - `simple_merkle.py`：扁平 Merkle 树（无层次）
+  - `fixed_anchor.py`：固定间隔锚定策略
+
+- **测试场景** (`benchmarks/scenarios/`)
+  - `throughput.py`：480p/720p/1080p 吞吐量对比
+  - `latency.py`：单 GOP 延迟分解（SHA-256 / pHash / Merkle）
+  - `tamper_detection.py`：SHA-256 vs pHash vs VIF 篡改检测 TPR/FPR/F1
+  - `scalability.py`：1/5/10/20 路并发可扩展性
+  - `resource_usage.py`：CPU/内存占用
+
+- **报告生成** (`benchmarks/report/`)
+  - `latex_table.py`：JSON → LaTeX tabular 表格（吞吐量/延迟/篡改检测）
+  - `plot_generator.py`：matplotlib + seaborn 论文图表（柱状图/折线图/对比图）
+
+- **单元测试** (`tests/test_benchmark.py`)
+  - 23 个测试用例：metrics 计算、数据集生成、baselines、LaTeX 输出格式
+
+### Testing Results
+
+- `tests/test_benchmark.py`: 23/23 通过 ✅
+
+### Notes
+
+- 新增依赖：`tabulate`
+- 全部新建文件，不修改主系统任何代码
+- 使用合成数据，无需真实视频即可运行
+
+---
+
 ## 2026-03-23 (MAB 自适应锚定策略)
 
 ### Added
