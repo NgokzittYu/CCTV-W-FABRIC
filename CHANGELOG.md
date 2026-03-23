@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-03-23 (MAB 自适应锚定策略)
+
+### Added
+
+- **MAB 锚定模块** (`services/mab_anchor.py`)
+  - 4 个锚定臂：Arm 0/1/2/3 = 每 1/2/5/10 个 GOP 锚定一次
+  - `compute_reward(success, cost, latency)`：reward = α×成功率 - β×成本 - γ×延迟
+  - `UCBStrategy` 类：UCB1 选择策略
+    - 初始探索保证每个臂至少被拉一次
+    - UCB 值 = Q(i) + c × √(ln(N)/n(i))，默认 c = √2
+    - 1000 次模拟收敛到最优臂选择率 > 50%
+  - `ThompsonStrategy` 类：Beta 分布 Thompson Sampling
+    - 正 reward → α += 1，负/零 reward → β += 1
+    - 500 次模拟收敛到最优臂
+  - `MABAnchorManager` 类：
+    - `should_anchor(gop_index) -> bool`：按当前臂间隔决策
+    - `report_result(success, cost, latency)`：反馈更新 MAB 策略
+    - `save_state()` / `load_state()`：JSON 持久化（默认 `data/mab_state.json`）
+    - `get_stats()`：获取每个臂的统计信息
+
+- **MAB 单元测试** (`tests/test_mab_anchor.py`)
+  - 24 个测试用例，覆盖 5 个测试类：
+  - `TestComputeReward`（5 个）：成功/失败、成本/延迟惩罚、值域钳制
+  - `TestUCBStrategy`（4 个）：初始探索、收敛性、序列化、统计信息
+  - `TestThompsonStrategy`（3 个）：收敛性、Beta 更新、序列化
+  - `TestMABAnchorManager`（5 个）：间隔触发、结果反馈、持久化、Thompson 模式、统计
+  - `TestAnchorModeIntegration`（7 个）：fixed/ucb/thompson 模式切换、EIS 仍计算、向后兼容
+
+### Changed
+
+- **AdaptiveAnchor 扩展** (`services/adaptive_anchor.py`)
+  - `__init__` 新增 `anchor_mode` 参数，默认读取环境变量 `ANCHOR_MODE`
+  - `ANCHOR_MODE=fixed`（默认）：现有 EIS 固定阈值逻辑，完全向后兼容
+  - `mab_ucb` / `mab_thompson`：创建 `MABAnchorManager` 实例，委托锚定决策
+  - MAB 模式下 EIS 仍被计算（用于监控和日志），但 `should_report_now` 由 MAB 覆盖
+  - `AnchorDecision` 新增 `mab_arm: Optional[int]`（仅 MAB 模式非 None）
+  - 新增 `report_anchor_result(success, cost, latency)` 方法
+
+### Technical Details
+
+- **UCB1 探索–利用平衡**：
+  - 探索系数 c = √2（经典 UCB1）
+  - 初始阶段每个臂强制拉一次，消除冷启动偏差
+  - 随着试验次数增加，逐渐收敛到最高平均 reward 的臂
+
+- **Reward 设计**：
+  - α=0.6（成功率权重）、β=0.2（成本权重）、γ=0.2（延迟权重）
+  - 归一化参考值：成本 1.0、延迟 5.0 秒
+  - reward ∈ [-1, 1]，正值鼓励当前臂，负值惩罚
+
+- **状态持久化**：
+  - JSON 格式，包含策略参数和运行时统计
+  - 服务重启后自动恢复历史学习
+  - 线程安全（`threading.Lock` 保护决策和更新）
+
+### Testing Results
+
+- `tests/test_mab_anchor.py`（ANCHOR_MODE=mab_ucb）: 24/24 通过 ✅
+- `tests/test_adaptive_anchor.py`（ANCHOR_MODE=fixed）: 15/15 通过 ✅
+
+### Notes
+
+- 无需新增依赖：numpy、json 均已存在
+- MAB 决策延迟 < 1ms（纯数学计算）
+- 对 `adaptive_anchor.py` 仅新增 ~30 行分发逻辑，不改现有 EIS/滑动窗口逻辑
+- 权重和归一化参考值可在 `mab_anchor.py` 模块顶部常量中调整
+
+---
+
 ## 2026-03-23 (多模态融合 VIF 视频完整性指纹)
 
 ### Added

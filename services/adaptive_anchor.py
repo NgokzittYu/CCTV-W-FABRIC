@@ -92,6 +92,7 @@ class AnchorDecision:
     motion_features: Optional[MotionFeatures] = None
     anomaly_result: Optional[AnomalyResult] = None
     signal_breakdown: Optional[dict] = None
+    mab_arm: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +372,7 @@ class AdaptiveAnchor:
         upgrade_confirm: int = 3,
         downgrade_confirm: int = 5,
         eis_mode: Optional[str] = None,
+        anchor_mode: Optional[str] = None,
     ):
         """
         初始化自适应锚点管理器
@@ -380,6 +382,7 @@ class AdaptiveAnchor:
             upgrade_confirm: 升级所需确认次数（默认 3）
             downgrade_confirm: 降级所需确认次数（默认 5）
             eis_mode: EIS 模式 ("lite" 或 "full")，默认读取环境变量 EIS_MODE
+            anchor_mode: 锚定策略 ("fixed"/"mab_ucb"/"mab_thompson")，默认读取 ANCHOR_MODE
         """
         self.window_size = window_size
         self.upgrade_confirm = upgrade_confirm
@@ -387,6 +390,9 @@ class AdaptiveAnchor:
 
         # EIS 模式
         self.eis_mode = eis_mode or os.environ.get("EIS_MODE", "lite")
+
+        # 锚定模式
+        self.anchor_mode = anchor_mode or os.environ.get("ANCHOR_MODE", "fixed")
 
         # 滑动窗口
         self._count_history: deque[int] = deque(maxlen=window_size)
@@ -412,10 +418,17 @@ class AdaptiveAnchor:
             self._anomaly_detector = AnomalyDetector()
             self._rule_engine = EISRuleEngine()
 
+        # MAB 锚定管理器
+        self._mab_manager = None
+        self._gop_counter = 0
+        if self.anchor_mode in ("mab_ucb", "mab_thompson"):
+            from services.mab_anchor import MABAnchorManager
+            self._mab_manager = MABAnchorManager(mode=self.anchor_mode)
+
         logger.info(
             f"自适应锚点初始化: window_size={window_size}, "
             f"upgrade_confirm={upgrade_confirm}, downgrade_confirm={downgrade_confirm}, "
-            f"eis_mode={self.eis_mode}"
+            f"eis_mode={self.eis_mode}, anchor_mode={self.anchor_mode}"
         )
 
     def _calculate_eis(self, smoothed_count: int) -> float:
@@ -590,17 +603,25 @@ class AdaptiveAnchor:
         report_interval = self._level_to_interval(self._current_level)
 
         # 判断是否应立即上报
-        current_time = time.time()
-        time_since_last_report = current_time - self._last_report_time
-        should_report_now = time_since_last_report >= report_interval
+        mab_arm = None
+        if self._mab_manager is not None:
+            # MAB 模式：由 MAB 策略决定是否锚定
+            self._gop_counter += 1
+            should_report_now = self._mab_manager.should_anchor(self._gop_counter)
+            mab_arm = self._mab_manager.current_arm
+        else:
+            # Fixed 模式：基于时间间隔决定
+            current_time = time.time()
+            time_since_last_report = current_time - self._last_report_time
+            should_report_now = time_since_last_report >= report_interval
 
         # 如果需要上报，更新上报时间
         if should_report_now:
-            self._last_report_time = current_time
+            self._last_report_time = time.time()
             logger.debug(
                 f"GOP {semantic.gop_id}: 触发上报 "
                 f"(level={self._current_level}, interval={report_interval}s, "
-                f"elapsed={time_since_last_report:.1f}s)"
+                f"anchor_mode={self.anchor_mode})"
             )
 
         return AnchorDecision(
@@ -612,4 +633,22 @@ class AdaptiveAnchor:
             motion_features=motion_features,
             anomaly_result=anomaly_result,
             signal_breakdown=signal_breakdown,
+            mab_arm=mab_arm,
         )
+
+    def report_anchor_result(
+        self,
+        success: bool,
+        cost: float = 0.0,
+        latency: float = 0.0,
+    ) -> None:
+        """
+        报告锚定结果（仅 MAB 模式使用）。
+
+        Args:
+            success: 锚定/验证是否成功
+            cost: 锚定成本
+            latency: 锚定延迟（秒）
+        """
+        if self._mab_manager is not None:
+            self._mab_manager.report_result(success, cost, latency)
