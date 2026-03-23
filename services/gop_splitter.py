@@ -59,16 +59,17 @@ def _is_intra_only(stream: av.video.stream.VideoStream) -> bool:
 # ---------------------------------------------------------------------------
 
 def _decode_keyframe(packet: av.Packet, stream: av.video.stream.VideoStream) -> np.ndarray:
-    """Decode the keyframe packet and return a BGR numpy array."""
-    codec_ctx = av.CodecContext.create(stream.codec_context.name, "r")
-    codec_ctx.extradata = stream.codec_context.extradata
-    codec_ctx.width = stream.codec_context.width
-    codec_ctx.height = stream.codec_context.height
-    codec_ctx.pix_fmt = stream.codec_context.pix_fmt
+    """Decode the keyframe packet and return a BGR numpy array.
 
-    frames = codec_ctx.decode(packet)
-    if frames:
-        return frames[0].to_ndarray(format="bgr24")
+    Uses the stream's own codec_context which already has SPS/PPS and full
+    decoder state, avoiding the empty-decode issue with a fresh CodecContext.
+    """
+    try:
+        frames = stream.codec_context.decode(packet)
+        if frames:
+            return frames[0].to_ndarray(format="bgr24")
+    except av.error.InvalidDataError:
+        pass
 
     # Fallback: return empty array if decode somehow fails
     print("[GOP_SPLITTER] Warning: keyframe decode returned no frames")
