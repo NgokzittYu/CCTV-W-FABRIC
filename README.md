@@ -13,7 +13,7 @@
 
 ## 📖 项目简介
 
-本项目实现了一套完整的监控视频防篡改解决方案，通过在边缘设备上部署AI模型进行实时视频分析，结合Hyperledger Fabric联盟链技术确保视频数据的完整性和可追溯性。系统采用三级Merkle树结构和自适应锚定策略，在保证安全性的同时大幅降低链上存储成本。
+本项目实现了一套完整的监控视频防篡改解决方案，通过在边缘设备上部署AI模型进行实时视频分析，结合Hyperledger Fabric联盟链技术确保视频数据的完整性和可追溯性。系统采用三级Merkle树结构、多模态融合视频指纹（VIF）和基于Multi-Armed Bandit的自适应锚定策略，在保证安全性的同时大幅降低链上存储成本。
 
 ### 核心价值
 
@@ -30,15 +30,24 @@
 ### 🎥 边缘智能层
 
 - **GOP级视频切分**：使用pyav库按GOP（Group of Pictures）切分视频流
-- **三重哈希计算**：
+- **多模态哈希计算**：
   - 密码学哈希（SHA-256）：对GOP原始编码字节计算
-  - 感知哈希（pHash）：对关键帧图像计算，容忍转码
-  - 语义哈希（Semantic Hash）：YOLOv8提取目标类别计数
+  - 深度感知哈希（Deep pHash）：MobileNetV3-Small + LSH 压缩为 64-bit 指纹，支持 `PHASH_MODE=legacy/deep` 切换
+  - 语义哈希（Semantic Hash）：YOLOv8-nano 提取目标类别计数
+- **🆕 多模态融合指纹（VIF）**：
+  - 融合感知哈希（pool 后 576d）+ 语义特征（pool 前 + GAP 576d）+ 时序光流（96d）
+  - LSH 投影到 256 位固定长度，支持 `VIF_MODE=off/phash_only/semantic_only/fusion`
+  - 权重可配置（`VIF_PHASH_WEIGHT` / `VIF_SEMANTIC_WEIGHT` / `VIF_TEMPORAL_WEIGHT`）
 - **三级Merkle树**：GOP → Chunk(30s) → Segment(5min) 层级结构
-- **自适应锚定（EIS）**：
-  - 低活跃度（EIS < 0.3）：每5分钟上报
-  - 中活跃度（0.3 ≤ EIS ≤ 0.7）：每1分钟上报
-  - 高活跃度（EIS > 0.7）：每10秒上报
+- **自适应锚定**：
+  - **EIS 双模式**（`EIS_MODE=lite/full`）：
+    - `lite`：纯 YOLO 目标计数 → 三级 EIS (0.1/0.5/0.9)
+    - `full`：光流运动分析 + 统计异常检测 + 规则引擎加权融合
+  - **🆕 MAB 锚定策略**（`ANCHOR_MODE=fixed/mab_ucb/mab_thompson`）：
+    - `fixed`（默认）：传统 EIS 固定阈值分档
+    - `mab_ucb`：UCB1 策略，动态学习最优锚定间隔
+    - `mab_thompson`：Thompson Sampling，贝叶斯自适应
+    - 4 个锚定臂：每 1/2/5/10 个 GOP 锚定一次
 
 ### 🌐 聚合网关层
 
@@ -498,19 +507,26 @@ python -m pytest tests/ -v
 python -m pytest tests/test_adaptive_anchor.py -v
 python -m pytest tests/test_hierarchical_merkle.py -v
 python -m pytest tests/test_tri_state_verifier.py -v
+
+# VIF 多模态融合指纹测试
+VIF_MODE=fusion python -m pytest tests/test_vif.py -v
+
+# MAB 自适应锚定测试
+ANCHOR_MODE=mab_ucb python -m pytest tests/test_mab_anchor.py -v
+
+# 完整版 EIS 测试
+python -m pytest tests/test_full_eis.py -v
+
+# 深度感知哈希测试
+PHASH_MODE=deep python -m pytest tests/test_deep_phash.py -v
 ```
 
-### 集成测试
+### 回归测试
 
 ```bash
-# 端到端GOP验证测试
-python -m pytest tests/test_gop_verification_e2e.py -v
-
-# 自适应锚定集成测试
-python -m pytest tests/test_anchor_integration.py -v
-
-# Epoch Merkle树测试
-python -m pytest tests/test_epoch_merkle.py -v
+# 确保新功能不影响现有系统
+python -m pytest tests/test_perceptual_hash.py tests/test_merkle_utils.py \
+  tests/test_hierarchical_merkle.py tests/test_adaptive_anchor.py -v
 ```
 
 ### 性能测试
@@ -564,6 +580,13 @@ python tests/benchmark_merkle.py
 | `SEMANTIC_MODEL_PATH` | `yolov8n.pt` | YOLO模型路径 |
 | `SEMANTIC_CONFIDENCE` | `0.5` | 检测置信度阈值 |
 | `PHASH_HAMMING_THRESHOLD` | `10` | pHash相似度阈值 |
+| `PHASH_MODE` | `legacy` | 感知哈希模式（`legacy`/`deep`） |
+| `VIF_MODE` | `off` | VIF 融合指纹模式（`off`/`phash_only`/`semantic_only`/`fusion`） |
+| `VIF_PHASH_WEIGHT` | `0.4` | VIF 感知哈希权重 |
+| `VIF_SEMANTIC_WEIGHT` | `0.35` | VIF 语义特征权重 |
+| `VIF_TEMPORAL_WEIGHT` | `0.25` | VIF 时序特征权重 |
+| `EIS_MODE` | `lite` | EIS 计算模式（`lite`/`full`） |
+| `ANCHOR_MODE` | `fixed` | 锚定策略（`fixed`/`mab_ucb`/`mab_thompson`） |
 
 ### 自适应锚定配置
 
@@ -644,38 +667,55 @@ python -m services.gop_splitter --file video.mp4 --debug
 ```
 CCTV-W-FABRIC-main/
 ├── chaincode/                  # 智能合约（Go）
-│   ├── chaincode.go           # 主合约逻辑
-│   ├── chaincode_test.go      # 合约测试
+│   ├── chaincode.go           # 主合约逻辑（Anchor / VerifyAnchor / VerifyEvent）
+│   ├── chaincode_test.go      # 合约单元测试
 │   └── go.mod
 ├── services/                   # 核心服务模块
-│   ├── gop_splitter.py        # GOP切分
-│   ├── crypto_utils.py        # 密码学哈希
-│   ├── perceptual_hash.py     # 感知哈希
-│   ├── semantic_fingerprint.py # 语义指纹
-│   ├── merkle_utils.py        # Merkle树工具
-│   ├── adaptive_anchor.py     # 自适应锚定
-│   ├── minio_storage.py       # MinIO存储
+│   ├── gop_splitter.py        # GOP切分 + 哈希计算 + VIF 计算
+│   ├── perceptual_hash.py     # 感知哈希（legacy pHash + deep MobileNetV3+LSH）
+│   ├── semantic_fingerprint.py # YOLOv8 语义指纹
+│   ├── vif.py                 # 🆕 多模态融合指纹 VIF
+│   ├── merkle_utils.py        # Merkle树工具（叶子哈希 / 树构建 / 证明）
+│   ├── adaptive_anchor.py     # 自适应锚定（EIS lite/full + MAB 集成）
+│   ├── mab_anchor.py          # 🆕 MAB 锚定策略（UCB1 + Thompson Sampling）
 │   ├── tri_state_verifier.py  # 三态验证
+│   ├── minio_storage.py       # MinIO存储
 │   ├── gop_verifier.py        # GOP验证器
 │   ├── gateway_service.py     # 网关服务
-│   └── fabric_client.py       # Fabric客户端
+│   ├── fabric_client.py       # Fabric客户端
+│   ├── crypto_utils.py        # 密码学哈希
+│   ├── detection_service.py   # YOLO 检测服务
+│   ├── event_aggregator.py    # 事件聚合
+│   └── workorder_service.py   # 工单服务
 ├── gateway/                    # 网关层
 │   ├── gateway_service.py     # 网关主服务
 │   ├── simulate_devices.py    # 设备模拟器
-│   ├── README.md              # 网关文档
-│   └── README_CN.md
-├── tests/                      # 测试文件
-│   ├── test_gop_splitter.py
-│   ├── test_hierarchical_merkle.py
-│   ├── test_adaptive_anchor.py
-│   ├── test_tri_state_verifier.py
-│   ├── test_gop_verification_e2e.py
-│   └── ...
-├── sample_videos/              # 测试视频
+│   └── README.md / README_CN.md
+├── tests/                      # 测试文件（111+ 测试用例）
+│   ├── test_perceptual_hash.py    # 感知哈希测试 (11)
+│   ├── test_deep_phash.py         # 深度 pHash 测试 (5)
+│   ├── test_vif.py                # 🆕 VIF 融合指纹测试 (32)
+│   ├── test_semantic_fingerprint.py # 语义指纹测试 (13)
+│   ├── test_merkle_utils.py       # Merkle树测试 (20)
+│   ├── test_hierarchical_merkle.py # 三级 Merkle 测试 (9)
+│   ├── test_adaptive_anchor.py    # 自适应锚定测试 (15)
+│   ├── test_full_eis.py           # 完整版 EIS 测试 (18)
+│   ├── test_mab_anchor.py         # 🆕 MAB 锚定测试 (24)
+│   ├── test_tri_state_verifier.py  # 三态验证测试 (11)
+│   ├── test_gop_verification_e2e.py # 端到端验证测试
+│   ├── test_anchor_integration.py  # 链上锚定集成测试
+│   └── test_epoch_merkle.py       # Epoch Merkle 测试 (11)
+├── scripts/                    # 工具脚本
+│   ├── ablation_phash.py      # pHash 消融实验
+│   ├── ablation_eis.py        # EIS 消融实验
+│   └── tamper_demo.py         # 篡改检测演示
 ├── config.py                   # 配置文件
 ├── detect.py                   # 视频检测脚本
 ├── verify_evidence.py          # 证据验证脚本
+├── web_app.py                  # Web 服务 + 网关 API
+├── anchor_to_fabric.py         # Fabric 锚定脚本
 ├── requirements.txt            # Python依赖
+├── CHANGELOG.md                # 更新日志
 └── README.md                   # 本文档
 ```
 
@@ -683,31 +723,34 @@ CCTV-W-FABRIC-main/
 
 ## 🗺️ 开发路线图
 
-### ✅ 已完成（MVP）
+### ✅ 已完成
 
 - [x] GOP级视频切分
 - [x] 三重哈希计算（SHA-256 + pHash + Semantic）
+- [x] 深度感知哈希（MobileNetV3 + LSH）
+- [x] 多模态融合指纹 VIF（感知 + 语义 + 时序光流）
 - [x] 三级Merkle树（GOP → Chunk → Segment）
-- [x] 自适应锚定（EIS评分）
+- [x] 自适应锚定（EIS评分 lite + full）
+- [x] 完整版 EIS（光流 + 异常检测 + 规则引擎）
+- [x] MAB 自适应锚定（UCB1 + Thompson Sampling）
 - [x] MinIO分布式存储
 - [x] 网关聚合服务
 - [x] Fabric智能合约
 - [x] 三态验证器
-- [x] 端到端测试
+- [x] 端到端测试（111+ 测试用例）
+- [x] 消融实验脚本（pHash / EIS）
+- [x] 篡改检测演示脚本
 
 ### 🚧 进行中
 
 - [ ] Web管理界面
 - [ ] 实时视频流处理
 - [ ] 设备私钥签名机制
-- [ ] 审计合约（AuditContract）
 
 ### 📋 计划中
 
 - [ ] IPFS集群部署（替代MinIO）
-- [ ] 深度感知哈希（MobileNetV3 + LSH）
 - [ ] RTP字节级GOP切分
-- [ ] 完整版EIS（光流 + 异常检测）
 - [ ] 多链互操作
 - [ ] 移动端验证APP
 
@@ -750,18 +793,33 @@ CCTV-W-FABRIC-main/
 
 ## 📝 更新日志
 
-### v1.0.0 (2026-03-16)
+### v1.3.0 (2026-03-23)
 
-**初始版本发布**
+- ✅ **多模态融合指纹 VIF**：感知哈希 + 语义特征 + 时序光流 → 256 位融合指纹
+- ✅ **MAB 自适应锚定**：UCB1 / Thompson Sampling 动态学习最优锚定间隔
 
-- ✅ 实现边缘AI视频分析模块（YOLOv8）
-- ✅ 实现三级Merkle树结构（GOP → Chunk → Segment）
-- ✅ 实现自适应锚定策略（EIS评分）
-- ✅ 实现聚合网关层（Epoch Merkle树）
-- ✅ 集成Hyperledger Fabric联盟链
-- ✅ 集成MinIO分布式存储
-- ✅ 实现三态验证系统（INTACT/RE-ENCODED/TAMPERED）
-- ✅ 完成端到端测试和文档
+### v1.2.0 (2026-03-23)
+
+- ✅ **完整版 EIS**：光流运动分析 + 统计异常检测 + 规则引擎加权融合
+- ✅ **深度感知哈希升级**：MobileNetV3-Small + LSH 压缩
+
+### v1.1.0 (2026-03-16 ~ 2026-03-17)
+
+- ✅ 语义指纹与组合验证
+- ✅ 网关聚合服务（EpochMerkleTree）
+- ✅ 自适应锚定模块（EIS 评分）
+- ✅ GOP 验证与三态验证器
+- ✅ 篡改检测演示脚本
+
+### v1.0.0 (2026-03-13 ~ 2026-03-15)
+
+- ✅ GOP 级视频切分 + 三重哈希计算
+- ✅ Merkle 树类封装（序列化 + 证明）
+- ✅ MinIO 分布式存储集成
+- ✅ Fabric 智能合约（Anchor / VerifyAnchor）
+- ✅ 端到端测试
+
+> 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
