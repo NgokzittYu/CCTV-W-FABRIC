@@ -88,8 +88,8 @@ async function generateTamper(type) {
     }
 
     const status = document.getElementById('tamperStatus');
-    const labels = { frame_replace: '帧替换', compression: '重压缩', noise_inject: '噪声注入' };
-    status.textContent = `⏳ 正在生成 "${labels[type]}" 篡改视频…`;
+    const labels = { frame_replace: '帧替换', compression: '重压缩', noise_inject: '噪声注入', mid_frame: 'P/B帧间篡改' };
+    status.textContent = `⏳ 正在生成 "${labels[type] || type}" 篡改视频…`;
     status.classList.remove('hidden');
 
     const formData = new FormData();
@@ -103,7 +103,7 @@ async function generateTamper(type) {
         const data = await res.json();
         tamperGenerated = true;
         currentTamperId = data.tamper_id;
-        status.innerHTML = `✅ 已生成 "${labels[type]}" 篡改视频 — ${data.tampered_count}/${data.total_gops} 个 GOP 被篡改`;
+        status.innerHTML = `✅ 已生成 "${labels[type] || type}" 篡改视频 — ${data.tampered_count}/${data.total_gops} 个 GOP 被篡改`;
         updateDetectBtn();
     } catch (e) {
         status.textContent = `❌ 生成失败: ${e.message}`;
@@ -175,11 +175,12 @@ function renderDetectResults(data) {
                     <span class="state-badge ${stateCls}">${c.state}</span>
                 </div>
                 <div class="text-right">
-                    <div class="text-xs text-gray-400">Frame #${c.frame_index}</div>
+                    <div class="text-xs text-gray-400">GOP #${c.frame_index}</div>
                     <div class="text-xs ${c.sha_match ? 'text-green-600' : 'text-red-500'}">
                         SHA: ${c.sha_match ? '匹配' : '不匹配'}
                     </div>
-                    <div class="text-xs text-gray-500">Hamming: ${c.hamming_distance}</div>
+                    <div class="text-xs text-gray-500">pHash Hamming: ${c.hamming_distance}</div>
+                    ${c.vif_match !== undefined && c.vif_match !== null ? `<div class="text-xs ${c.vif_match ? 'text-green-600' : 'text-red-500'}">VIF: ${c.vif_match ? '匹配' : '不匹配 ⚠️'}</div>` : ''}
                 </div>
             </div>
         `;

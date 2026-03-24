@@ -36,11 +36,36 @@
   - 鼠标悬停 Tooltip 显示完整 64 字符哈希值
   - Padding 节点标记为 `Pad`（灰色小圆），与真实 GOP 叶子清晰区分
 
+- **VIF 多帧均匀采样** (`services/gop_splitter.py`)
+  - `split_gops()` 在 `VIF_MODE != off` 时，缓存非关键帧 packets 并均匀采样
+  - 默认采样 3 帧（通过 `VIF_SAMPLE_FRAMES` 环境变量可调），使 VIF 时序光流分支不再退化为零向量
+  - 解码顺序修正：先采样上一个 GOP 的 P/B 帧，再解码新 keyframe（防止 H.264 解码器参考帧被覆盖）
+  - 按序遍历所有 packet 维护参考帧链，仅保留采样索引处的帧
+
+- **P/B 帧间篡改检测** (`demo/app.py` + `demo/templates/detect.html` + `demo/static/js/detect.js`)
+  - 新增 `mid_frame` 篡改类型：修改 GOP 原始字节的 P/B 帧区域，保留 I 帧不变
+  - 检测时若 pHash 匹配但 VIF 不匹配，自动从 `RE_ENCODED` 升级为 `TAMPERED`
+  - 前端新增 `🎞️ P/B帧间篡改` 按钮（青色），结果页显示 VIF 匹配/不匹配状态
+
 ### Changed
+
+- **所有篡改类型统一使用 VIF 检测** (`demo/app.py`)
+  - `frame_replace` / `compression` / `noise_inject` 不再仅对比 pHash，统一走 `gop_level` 模式
+  - I 帧篡改时也对篡改后的关键帧计算 VIF 指纹，与原始 VIF 对比
+  - 解决了局部帧替换（pHash Hamming < 旧阈值 10）被误判为 `RE_ENCODED` 的问题
+
+- **Hamming 阈值从 10 降至 5** (`demo/app.py`)
+  - pHash 和 VIF 的判定阈值统一从 10 降至 5，提高对局部篡改的灵敏度
+  - 学术论文中 pHash 典型阈值为 5，与行业标准对齐
 
 - **GOP 卡片哈希完整显示** (`demo/static/js/analyze.js`)
   - 移除 SHA-256 和 VIF 哈希值的 `.slice()` 截断，现在完整显示全部字符
   - CSS `word-break: break-all` 确保长哈希自动换行不撑破布局
+
+### Performance Notes
+
+- VIF 多帧采样增加约 8 秒处理耗时（3 帧模式），是安全性与性能的权衡
+- 基准测试：0 帧=3s / 2 帧=9s / 3 帧=11s / 6 帧=19s / 8 帧=20s
 
 ---
 

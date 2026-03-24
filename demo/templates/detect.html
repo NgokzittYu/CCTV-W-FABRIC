@@ -40,6 +40,9 @@
             <button onclick="generateTamper('noise_inject')" class="tamper-btn px-4 py-2 bg-purple-50 text-purple-600 rounded-lg text-sm font-medium hover:bg-purple-100 transition border border-purple-200">
                 🌫️ 噪声注入
             </button>
+            <button onclick="generateTamper('mid_frame')" class="tamper-btn px-4 py-2 bg-teal-50 text-teal-600 rounded-lg text-sm font-medium hover:bg-teal-100 transition border border-teal-200" title="仅篡改 P/B 帧，保留 I 帧不变 — 测试 VIF 时序光流检测能力">
+                🎞️ P/B帧间篡改
+            </button>
             <span class="text-gray-300 text-sm self-center">或</span>
             <div>
                 <div class="upload-zone py-3 px-6 inline-block" id="suspectUploadZone">

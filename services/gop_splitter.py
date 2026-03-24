@@ -9,6 +9,7 @@ grouped into logical GOPs of a configurable size (default 25 frames).
 """
 import argparse
 import hashlib
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -170,6 +171,11 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
         print(f"[GOP_SPLITTER] Intra-only codec ({video_stream.codec_context.name}), "
               f"grouping every {mjpeg_gop_size} frames as one logical GOP")
 
+    # VIF 多帧采样设置
+    vif_mode = os.environ.get("VIF_MODE", "off").strip().lower()
+    vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "3"))
+    need_extra = (vif_mode != "off" and vif_sample_n > 0)
+
     gops: List[GOPData] = []
     gop_id = 0
 
@@ -178,6 +184,41 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     start_ts = 0.0
     end_ts = 0.0
     pending_keyframe: Optional[np.ndarray] = None
+    # 缓存当前 GOP 的非关键帧 packets，用于解码采样
+    gop_packets: List[av.Packet] = []
+
+    def _sample_extra_frames(packets: List[av.Packet], stream) -> List[np.ndarray]:
+        """从缓存的 packets 中按顺序解码并均匀采样，返回 BGR 帧列表。
+
+        必须在下一个 keyframe 解码之前调用，以保持 H.264 解码器参考帧状态。
+        所有 packet 按顺序送入解码器（维护参考帧链），但只保留采样索引处的帧。
+        """
+        if not packets or not need_extra:
+            return []
+        # 确定采样索引
+        total = len(packets)
+        if total <= vif_sample_n:
+            sample_set = set(range(total))
+        else:
+            step = total / vif_sample_n
+            sample_set = {int(i * step) for i in range(vif_sample_n)}
+
+        sampled: List[np.ndarray] = []
+        max_needed = max(sample_set) + 1  # 只需解码到最后一个采样点
+        # 抑制 H.264 解码 P/B 帧时的警告
+        prev_level = av.logging.get_level()
+        av.logging.set_level(av.logging.FATAL)
+        # 按顺序解码到最后采样点为止，仅保留采样帧
+        for idx in range(max_needed):
+            pkt = packets[idx]
+            try:
+                decoded = stream.codec_context.decode(pkt)
+                if decoded and idx in sample_set:
+                    sampled.append(decoded[0].to_ndarray(format="bgr24"))
+            except Exception:
+                pass
+        av.logging.set_level(prev_level)
+        return sampled
 
     for packet in container.demux(video_stream):
         if packet.size == 0:
@@ -205,25 +246,32 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
         else:
             # H.264/H.265 mode: split on keyframe boundaries
             if packet.is_keyframe:
-                new_keyframe = _decode_keyframe(packet, video_stream)
-
                 if buf and pending_keyframe is not None:
-                    gops.append(_build_gop(gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe))
+                    # ★ 关键：在解码新 keyframe 之前先采样上一个 GOP 的 P/B 帧
+                    # 此时解码器的参考帧仍是上一个 GOP 的 I 帧
+                    extra = _sample_extra_frames(gop_packets, video_stream)
+                    gops.append(_build_gop(gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe, extra_frames=extra))
                     gop_id += 1
 
+                # ★ 在 P/B 帧采样完成后，才解码新 keyframe
+                new_keyframe = _decode_keyframe(packet, video_stream)
                 pending_keyframe = new_keyframe
                 buf = bytearray(bytes(packet))
                 frame_count = 1
                 start_ts = ts
                 end_ts = ts
+                gop_packets = []  # 重置 packet 缓存
             else:
                 buf.extend(bytes(packet))
                 frame_count += 1
                 end_ts = ts
+                if need_extra:
+                    gop_packets.append(packet)
 
     # Finalize the last GOP
     if buf and pending_keyframe is not None:
-        gops.append(_build_gop(gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe))
+        extra = _sample_extra_frames(gop_packets, video_stream)
+        gops.append(_build_gop(gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe, extra_frames=extra))
 
     container.close()
     return gops
