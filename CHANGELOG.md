@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-03-24 (Demo 全面审计 + 交互式 Merkle 树 + 哈希完整显示)
+
+### Fixed
+
+- **`compute_leaf_hash` 缺失 VIF 参数** (`demo/app.py`)
+  - Merkle 树叶子哈希原先仅拼接 `SHA-256 + pHash`，遗漏了 `vif` 参数
+  - 修复后叶子哈希公式为 `SHA-256(sha256 + vif)`（VIF 可用时），与原项目 `merkle_utils.py` 逻辑一致
+
+- **`_tamper_store` 内存泄漏** (`demo/app.py`)
+  - 每次篡改生成都往全局字典追加数据，无清理机制
+  - 新增限制：最多保留 5 条，超出自动清理最旧条目
+
+- **`detect.js` 空输入可触发检测**
+  - 未选择原始视频/未生成篡改时也能点击"开始检测"按钮
+  - 新增前置校验，无输入时弹出提示；后端 error 响应增加捕获处理
+
+- **`analyze.js` 流水线重置丢失 icon 和描述**
+  - 重新分析时，step 1 的"I帧边界切分 · SHA-256 · pHash · VIF"被覆盖为"等待中"
+  - 修复后恢复各 step 的图标数字和 step 1 的默认描述
+
+- **`benchmark.js` 无数据时错误未捕获**
+  - API 返回 200 + `{error: ...}` JSON 时，`res.ok` 无法捕获
+  - 新增 `data.error` 检查，正确显示"暂无数据"提示
+
+- **移除未使用的 `import io`** (`demo/app.py`)
+
+### Added
+
+- **交互式 Merkle 树动画** (`demo/app.py` + `demo/static/js/analyze.js` + `demo/templates/analyze.html`)
+  - 后端：解析 `MerkleTree._levels` 递归构建 JSON 树结构，叶子节点携带 GOP I 帧缩略图
+  - 前端：使用 ECharts `tree` 系列渲染可交互 Merkle 树
+  - 交互：初始仅显示 Root 根节点（`initialTreeDepth: 0`），点击可逐层展开/折叠
+  - 中间节点显示 `Node` + 前 8 位 Hash；叶子节点以 I 帧缩略图为图标
+  - 鼠标悬停 Tooltip 显示完整 64 字符哈希值
+  - Padding 节点标记为 `Pad`（灰色小圆），与真实 GOP 叶子清晰区分
+
+### Changed
+
+- **GOP 卡片哈希完整显示** (`demo/static/js/analyze.js`)
+  - 移除 SHA-256 和 VIF 哈希值的 `.slice()` 截断，现在完整显示全部字符
+  - CSS `word-break: break-all` 确保长哈希自动换行不撑破布局
+
+---
+
+## 2026-03-24 (Web Demo 演示前端)
+
+### Added
+
+- **独立演示应用** (`demo/`)
+  - `app.py`：Flask 后端，8 路由 + SSE 流式进度推送
+  - 不依赖 Fabric / MinIO，单命令 `PYTHONPATH=. python demo/app.py` 启动
+  - **YOLO nano** 目标检测（延迟加载，首次 ~3s）
+  - **EIS 评分** 基于检测结果自动评估 GOP 重要性
+  - **MAB 自适应锚定** UCB1 策略动态决策（4 臂 × [1,2,5,10] 间隔）
+
+- **6 步流水线**
+  - GOP 切分 → YOLO 检测 → 哈希计算 → VIF 融合 → EIS+MAB 决策 → Merkle 构建
+
+- **4 个页面** (`demo/templates/`)
+  - `index.html`：系统总览 — 指标卡片 + 四层架构图 + VIF/MAB/EIS 创新点
+  - `analyze.html`：视频分析 — 上传/示例选择 → 4 步流水线动画（GOP 切分 → 哈希 → VIF → Merkle）
+  - `detect.html`：篡改检测 — 一键生成篡改视频（3 种类型）+ 三态判定 + 逐帧对比
+  - `benchmark.html`：实验数据 — ECharts 图表（吞吐量/延迟/TPR/资源）
+
+- **前端交互** (`demo/static/`)
+  - `css/style.css`：Apple 风格亮色主题（沿用 SecureLens 设计）
+  - `js/analyze.js`：视频上传/拖拽 + SSE 进度监听 + GOP 结果渲染
+  - `js/detect.js`：一键篡改生成 + 三态结果展示
+  - `js/benchmark.js`：ECharts 图表渲染
+
+### Notes
+
+- 新增依赖：`flask`
+- 全部新建文件，不修改原有 `web_app.py`
+- 内置示例视频通过软链接引用
+- 端口：5001（避免 macOS AirPlay 冲突）
+
+---
+
 ## 2026-03-23 (E2E Benchmark 框架)
 
 ### Added

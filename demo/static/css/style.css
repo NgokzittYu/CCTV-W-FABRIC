@@ -1,0 +1,205 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: #F5F5F7;
+    color: #1D1D1F;
+    margin: 0;
+}
+
+/* ── Glass Nav ── */
+.glass-panel {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* ── Nav Links ── */
+.nav-link {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-weight: 500;
+    color: #6B7280;
+    transition: all 0.2s;
+}
+.nav-link:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #1D1D1F;
+}
+.nav-active {
+    background: #3B82F6 !important;
+    color: #fff !important;
+}
+
+/* ── Card ── */
+.card {
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+.card:hover {
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Stat Card ── */
+.stat-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    transition: all 0.25s ease;
+}
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.12);
+}
+.stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #3B82F6, #8B5CF6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* ── Pipeline Steps ── */
+.pipeline-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    transition: all 0.3s;
+}
+.pipeline-step.running {
+    border-color: #3B82F6;
+    background: #EFF6FF;
+}
+.pipeline-step.done {
+    border-color: #10B981;
+    background: #F0FDF4;
+}
+.pipeline-step .icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #E5E7EB;
+    color: #9CA3AF;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+.pipeline-step.running .icon {
+    background: #3B82F6;
+    color: #fff;
+    animation: pulse 1.5s infinite;
+}
+.pipeline-step.done .icon {
+    background: #10B981;
+    color: #fff;
+}
+
+/* ── Pulse Animation ── */
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+}
+
+/* ── Upload Zone ── */
+.upload-zone {
+    border: 2px dashed #D1D5DB;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background: #FAFAFA;
+}
+.upload-zone:hover, .upload-zone.dragover {
+    border-color: #3B82F6;
+    background: #EFF6FF;
+}
+
+/* ── State Badge ── */
+.state-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 14px;
+}
+.state-intact { background: #D1FAE5; color: #065F46; }
+.state-reencoded { background: #FEF3C7; color: #92400E; }
+.state-tampered { background: #FEE2E2; color: #991B1B; }
+
+/* ── Overall result ── */
+.result-banner {
+    padding: 24px;
+    border-radius: 16px;
+    text-align: center;
+    font-size: 24px;
+    font-weight: 700;
+}
+.result-intact { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: #065F46; }
+.result-reencoded { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: #92400E; }
+.result-tampered { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: #991B1B; }
+
+/* ── Frame Grid ── */
+.frame-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+}
+.frame-card {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #E5E7EB;
+    transition: all 0.2s;
+}
+.frame-card.tampered {
+    border-color: #EF4444;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
+}
+.frame-card img {
+    width: 100%;
+    display: block;
+}
+
+/* ── Architecture Diagram ── */
+.arch-layer {
+    padding: 16px 20px;
+    border-radius: 14px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 14px;
+    transition: transform 0.2s;
+}
+.arch-layer:hover {
+    transform: scale(1.03);
+}
+.arch-arrow {
+    text-align: center;
+    color: #9CA3AF;
+    font-size: 20px;
+    padding: 4px 0;
+}
+
+/* ── Scrollbar ── */
+.hide-sb::-webkit-scrollbar { display: none; }
+.hide-sb { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Mono text ── */
+.hash-text {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    color: #6B7280;
+    word-break: break-all;
+}

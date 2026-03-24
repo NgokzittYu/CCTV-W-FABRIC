@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% set active_page = "analyze" %}
+{% block title %}SecureLens Demo — 视频分析{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-2xl font-bold mb-1">视频分析</h1>
+    <p class="text-sm text-gray-400 mb-6">上传视频 → GOP 切分(I帧边界) → YOLO + 指纹 → EIS/MAB → Merkle 树</p>
+
+    <!-- Upload / Sample Select -->
+    <div class="card p-6 mb-6">
+        <div class="flex gap-4 items-start">
+            <div class="flex-1">
+                <div class="upload-zone" id="uploadZone">
+                    <input type="file" id="videoInput" accept="video/*" class="hidden">
+                    <div class="text-3xl mb-2">📁</div>
+                    <p class="text-sm text-gray-500">拖拽视频文件到此处，或 <span class="text-blue-500 font-medium">点击选择</span></p>
+                    <p class="text-xs text-gray-400 mt-1">支持 MP4 / AVI / MOV</p>
+                </div>
+            </div>
+            <div class="text-gray-300 text-sm pt-12">或</div>
+            <div class="w-48">
+                <label class="text-xs text-gray-400 uppercase tracking-wider block mb-2">内置示例</label>
+                <div id="sampleList" class="space-y-2">
+                    <p class="text-xs text-gray-400">加载中...</p>
+                </div>
+            </div>
+        </div>
+        <div id="selectedVideo" class="hidden mt-4 p-3 bg-blue-50 rounded-xl flex justify-between items-center">
+            <span class="text-sm text-blue-700 font-medium" id="selectedName"></span>
+            <button onclick="startAnalysis()" class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition">
+                开始分析
+            </button>
+        </div>
+    </div>
+
+    <!-- Pipeline Progress -->
+    <div id="pipelineSection" class="card p-6 mb-6 hidden">
+        <h2 class="text-base font-semibold mb-4">处理流水线</h2>
+        <div class="space-y-3" id="pipelineSteps">
+            <div class="pipeline-step" data-step="1">
+                <div class="icon">1</div>
+                <div class="flex-1">
+                    <div class="text-sm font-medium">GOP 切分 + 指纹计算</div>
+                    <div class="text-xs text-gray-400 step-detail">I帧边界切分 · SHA-256 · pHash · VIF</div>
+                </div>
+            </div>
+            <div class="pipeline-step" data-step="2">
+                <div class="icon">2</div>
+                <div class="flex-1">
+                    <div class="text-sm font-medium">YOLO 目标检测</div>
+                    <div class="text-xs text-gray-400 step-detail">等待中</div>
+                </div>
+            </div>
+            <div class="pipeline-step" data-step="3">
+                <div class="icon">3</div>
+                <div class="flex-1">
+                    <div class="text-sm font-medium">EIS 评分 + MAB 决策</div>
+                    <div class="text-xs text-gray-400 step-detail">等待中</div>
+                </div>
+            </div>
+            <div class="pipeline-step" data-step="4">
+                <div class="icon">4</div>
+                <div class="flex-1">
+                    <div class="text-sm font-medium">Merkle 构建</div>
+                    <div class="text-xs text-gray-400 step-detail">等待中</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results -->
+    <div id="resultsSection" class="hidden space-y-6">
+        <!-- GOP List -->
+        <div class="card p-6">
+            <h2 class="text-base font-semibold mb-4">GOP 分析结果</h2>
+            <div id="gopList" class="space-y-3"></div>
+        </div>
+
+        <!-- MAB Stats -->
+        <div class="card p-6" id="mabSection">
+            <h2 class="text-base font-semibold mb-4">MAB 决策统计</h2>
+            <div id="mabStats"></div>
+        </div>
+
+        <!-- Merkle Info -->
+        <div class="card p-6 mt-6">
+            <h2 class="text-base font-semibold mb-4">区块锚定信息</h2>
+            <div id="merkleInfo" class="space-y-4"></div>
+            <div id="merkleTreeChart" style="height: 400px; width: 100%; display: none;" class="mt-4 border border-gray-100 rounded-xl bg-gray-50/50"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/analyze.js?v={{ range(1, 999999) | random }}"></script>
+{% endblock %}
