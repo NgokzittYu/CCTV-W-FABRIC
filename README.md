@@ -1,13 +1,23 @@
 # 基于边缘AI与联盟链的监控视频防篡改解决方案
+(SecureLens: Video Integrity Verification System)
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![Hyperledger Fabric](https://img.shields.io/badge/Hyperledger_Fabric-2.5-2F3134?style=flat&logo=hyperledger&logoColor=white)](https://www.hyperledger.org/use/fabric)
 [![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-00FFFF?style=flat)](https://github.com/ultralytics/ultralytics)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](https://opensource.org/licenses/MIT)
 
-> 一个结合边缘AI智能分析与区块链不可篡改特性的监控视频取证系统
+> 一个结合边缘 AI 智能分析与区块链不可篡改特性的监控视频取证系统
 
-[功能特性](#-功能特性) • [系统架构](#-系统架构) • [快速开始](#-快速开始) • [核心模块](#-核心模块) • [API文档](#-api文档) • [更新日志](CHANGELOG.md)
+[项目简介](#-项目简介) • [功能特性](#-功能特性) • [安装使用](docs/GETTING_STARTED.md) • [文档库](docs/GETTING_STARTED.md) • [📝 版本更新](CHANGELOG.md)
+
+SecureLens 利用边缘设备上的 AI 模型对监控视频进行实时语义与特征提取，并结合 Hyperledger Fabric 联盟链技术实现防篡改和快速审计。在保证司法级证据效力的同时，通过多模态融合视频指纹（VIF）和基于强化学系（MAB）的自适应上链策略，降低了 95% 的链上存储成本。
+
+---
+
+## 📚 快速导航
+
+- **[安装与快速开始指南](docs/GETTING_STARTED.md)**：环境配置、启动网络、API 文档、故障排查
+- **[📝 版本更新](CHANGELOG.md)**：了解最近架构演进与修复历史
 
 ---
 
@@ -29,814 +39,185 @@
 
 ### 🎥 边缘智能层
 
-- **GOP级视频切分**：使用pyav库按GOP（Group of Pictures）切分视频流
+- **GOP级视频切分**：使用 pyav 库按 GOP（Group of Pictures）切分视频流
 - **多模态哈希计算**：
-  - 密码学哈希（SHA-256）：对GOP原始编码字节计算
-  - 深度感知哈希（Deep pHash）：MobileNetV3-Small + LSH 压缩为 64-bit 指纹，支持 `PHASH_MODE=legacy/deep` 切换
+  - 密码学哈希（SHA-256）：对 GOP 原始编码字节计算
+  - 深度感知哈希（Deep pHash）：MobileNetV3-Small + LSH 压缩为 64-bit 指纹
   - 语义哈希（Semantic Hash）：YOLOv8-nano 提取目标类别计数
-- **🆕 多模态融合指纹（VIF）**：
-  - 融合感知哈希（pool 后 576d）+ 语义特征（pool 前 + GAP 576d）+ 时序光流（96d）
-  - LSH 投影到 256 位固定长度，支持 `VIF_MODE=off/phash_only/semantic_only/fusion`
-  - 权重可配置（`VIF_PHASH_WEIGHT` / `VIF_SEMANTIC_WEIGHT` / `VIF_TEMPORAL_WEIGHT`）
-- **三级Merkle树**：GOP → Chunk(30s) → Segment(5min) 层级结构
-- **自适应锚定**：
-  - **EIS 双模式**（`EIS_MODE=lite/full`）：
-    - `lite`：纯 YOLO 目标计数 → 三级 EIS (0.1/0.5/0.9)
-    - `full`：光流运动分析 + 统计异常检测 + 规则引擎加权融合
-  - **🆕 MAB 锚定策略**（`ANCHOR_MODE=fixed/mab_ucb/mab_thompson`）：
-    - `fixed`（默认）：传统 EIS 固定阈值分档
-    - `mab_ucb`：UCB1 策略，动态学习最优锚定间隔
-    - `mab_thompson`：Thompson Sampling，贝叶斯自适应
-    - 4 个锚定臂：每 1/2/5/10 个 GOP 锚定一次
+- **多模态融合指纹（VIF v2.1）**：
+  - 融合感知特征（576d）+ 语义特征（576d）+ 时序光流（96d）+ 压缩域运动矢量（MV Tag）
+  - LSH 投影到 256 位固定长度和防伪标记
+- **三级 Merkle 树**：GOP → Chunk(30s) → Segment(5min) 层级结构
+- **自适应锚定 (MAB)**：
+  - UCB1 / Thompson Sampling 策略，动态学习最优锚定间隔（每 1/2/5/10 个 GOP）
 
 ### 🌐 聚合网关层
 
 - **多设备聚合**：支持多路视频流同时接入
-- **Epoch Merkle树**：每30秒聚合所有设备的SegmentRoot
-- **设备签名验证**：ECDSA数字签名确保数据来源可信
-- **历史数据管理**：SQLite存储Merkle树结构和历史记录
+- **Epoch Merkle 树**：每 30 秒聚合所有设备的 SegmentRoot
+- **设备签名验证**：ECDSA 数字签名确保数据来源可信
+- **历史数据管理**：SQLite 存储 Merkle 树结构和历史记录
 
 ### ⛓️ 联盟链层
 
-- **Hyperledger Fabric**：单机Docker模拟多节点部署
-- **智能合约**：
-  - `AnchorContract`：存储EpochRoot和设备签名
-  - `VerifyContract`：验证Merkle路径和哈希一致性
-- **三态判定**：链下计算三态结果，链上只做Merkle验证
+- **Hyperledger Fabric**：单机 Docker 模拟多节点部署
+- **智能合约**：存储 EpochRoot，验证 Merkle 路径和哈希一致性
+- **三态判定**：链下计算三态结果，链上只做 Merkle 验证
 
 ### 💾 分布式存储层
 
-- **MinIO对象存储**：存储视频分片、语义JSON、Merkle树结构
-- **内容寻址**：自行计算SHA-256作为CID实现内容寻址
-- **数据持久化**：支持视频原始数据的长期存储和检索
+- **MinIO 对象存储**：存储视频分片、语义 JSON、Merkle 树结构
+- **内容寻址**：自行计算 SHA-256 作为 CID 实现内容寻址
 
 ---
 
-## 🏗️ 系统架构
+## 🏗️ 核心系统架构
+
+系统分为四个核心层：**边缘智能层**（视频分析与指纹提取）、**聚合网关层**（多节点协调与批处理）、**分布式存储层**（MinIO 保存原始证据）、以及**联盟链层**（Hyperledger Fabric 哈希上链存证）。
 
 ```mermaid
 flowchart TB
-    subgraph L4["验证与应用层"]
-        A1["司法取证终端"]
-        A2["安防管理平台"]
-        A3["第三方审计接口"]
+    subgraph EDGE["🧠 边缘智能层 · Edge AI Box"]
+        direction TB
+        CAM["📹 RTSP 视频流"]
+        SP_DEMUX["① GOP 切分与帧解码"]
+        VIF["② 多模态融合指纹 (VIF)"]
+        YOLO["③ YOLOv8 语义提取"]
+        MAB["④ 自适应锚定 (MAB)"]
+        MK["⑤ 三级 Merkle 树构建"]
+        
+        CAM --> SP_DEMUX
+        SP_DEMUX --> VIF
+        SP_DEMUX --> YOLO
+        YOLO --> MAB
+        VIF --> MK
+        MAB --> MK
     end
 
-    subgraph L3["联盟链层 Hyperledger Fabric"]
-        C1["存证合约<br>Anchor()"]
-        C2["验证合约<br>VerifyAnchor() / VerifyEvent()"]
-        CD["链上数据：EpochRoot / MerkleRoot / 设备签名 / 时间戳"]
+    subgraph CLOUD["☁️ 网关与确权平台"]
+        direction LR
+        GW["🌐 聚合网关 (Epoch 树)"]
+        SC["⛓️ Fabric 智能合约 (Anchor)"]
+        DB[("💾 MinIO 证据库")]
+        
+        MK --> GW
+        MK -.-> DB
+        GW --> SC
     end
 
-    subgraph L2["聚合网关层 Gateway Service"]
-        GW["收集多台边缘设备的 SegmentRoot<br>→ 构建 EpochMerkleTree<br>批量聚合，每30秒提交一次 EpochRoot"]
+    subgraph VERIFY["🔐 审计与取证端"]
+        direction LR
+        TRI_STATE["三态验证引擎 (Tri-State Verifier)"]
+        DEMO["🖥️ Web 交互面板"]
+        
+        DB -.-> TRI_STATE
+        SC -.-> TRI_STATE
+        TRI_STATE --> DEMO
     end
-
-    subgraph L1["边缘智能层 Edge AI Box"]
-        CAM["摄像头 RTSP/HLS"] --> BOX["边缘AI盒子"]
-        BOX --> B1["① GOP切分 & 三重哈希<br>SHA256 + pHash + Semantic"]
-        BOX --> B2["② YOLOv8 语义指纹提取"]
-        BOX --> B3["③ 三级Merkle树构建<br>GOP → Chunk(30s) → Segment(5min)"]
-        BOX --> B4["④ 自适应锚定 EIS评分<br>LOW(5min) / MED(1min) / HIGH(10s)"]
-    end
-
-    subgraph L0["分布式存储层"]
-        MINIO["MinIO 对象存储<br>视频分片 + 语义JSON + Merkle树结构<br>SHA-256内容寻址"]
-    end
-
-    L4 -->|"查询 & 三态验证"| L3
-    L3 -->|"返回验证结果"| L4
-    GW -->|"批量提交 EpochRoot"| L3
-    L1 -->|"上报 SegmentRoot + 语义摘要"| L2
-    L1 -->|"视频分片写入"| L0
-    L3 -->|"存储 Merkle Proof"| L0
-
-    style L4 fill:#1a1a2e,stroke:#e94560,color:#fff
-    style L3 fill:#16213e,stroke:#e94560,color:#fff
-    style L2 fill:#0f3460,stroke:#e94560,color:#fff
-    style L1 fill:#533483,stroke:#e94560,color:#fff
-    style L0 fill:#2b2d42,stroke:#e94560,color:#fff
-```
-
-### 数据流程
-
-**存证流程（实时运行）**
-
-```
-摄像头 → GOP切分 → 三重哈希 → YOLOv8语义提取 → EIS评分
-  → 三级Merkle树 → MinIO存储 → SegmentRoot上报 → 网关聚合
-  → EpochRoot → 上链
-```
-
-**验证流程（按需触发）**
-
-```
-验证请求 → MinIO拉取视频 → 重算哈希 → 获取Merkle路径
-  → 链上验证 → 三态判定 → 二分定位篡改点
+    
+    style EDGE fill:#1a1333,stroke:#bc8cff,color:#c9d1d9,stroke-width:2px
+    style CLOUD fill:#1c2333,stroke:#3fb950,color:#c9d1d9
+    style VERIFY fill:#2d1b1b,stroke:#f85149,color:#c9d1d9,stroke-width:2px
 ```
 
 ---
 
-## 🚀 快速开始
+## 🔬 核心技术一：多模态融合视频指纹 (VIF v2.1) 
 
-### 环境要求
+传统的视频哈希（如 SHA-256）对像素变化极其敏感，合法的视频转码或压缩会导致哈希彻底改变，从而产生极高的误报率（False Positive）。
 
-- **操作系统**：Linux / macOS
-- **Python**：3.10+
-- **Docker**：20.10+
-- **Docker Compose**：1.29+
-- **硬件**：建议8GB+ RAM，支持GPU加速（可选）
+为了解决"重压缩"与"恶意篡改"之间的区分问题，本项目引入了**多模态融合视频指纹（Video Integrity Fingerprint, VIF）**。VIF 同时提取空间的感知特征、语义特征和时序的运动特征，通过局部敏感哈希（LSH）将高维特征压缩为一段定长（256-bit）的抗鲁棒哈希。
 
-### 安装步骤
+### VIF 算法原理解析
 
-#### 1. 克隆项目
+VIF 结合三种互相正交的模态，并附带编码器时序来源标记：
 
-```bash
-git clone https://github.com/NgokzittYu/CCTV-W-FABRIC.git
-cd CCTV-W-FABRIC-main
-```
+#### 1. 👁️ 感知模态 (Vis) —— 像素级鲁棒特征
+- **算法**：基于 `MobileNetV3-Small`（预训练权重的深层卷积特征）。提取池化后的 576d 特征向量。
+- **作用**：捕捉整图色调、纹理与全局布局。
+- **敏感性**：对合法的 CRF 重压缩、细微光照变化具有抗性；对明显的大面积像素篡改（如：帧替换、高强度噪声、目标遮挡）高度敏感。
 
-#### 2. 安装Python依赖
+#### 2. 🏷️ 语义模态 (Sem) —— 目标级特征
+- **算法**：结合 YOLOv8 的目标检测计数，并将 `MobileNetV3` 的底层网格特征（池化前的空间特征图）进行特征融合（Global Average Pooling）。
+- **作用**：捕捉画面中的特定目标群和语义结构。
+- **敏感性**：具有一票否决权（Semantic Veto）—— 如果画面中突然凭空消失或凭空捏造出一辆车、一个人，哪怕在像素占比上极小，也会触发语义突变告警，直接判定为篡改（TAMPERED）。
 
-```bash
-# 创建虚拟环境（推荐）
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+#### 3. 🎬 时序模态 (Tem) —— 帧间动态特征
+- **算法**：对 GOP 内均匀采样的帧计算 **Farneback 稠密光流**（或可选压缩域 MV），提取运动边界与分布特征。
+- **作用**：验证视频的时间连贯性与运动模式。
+- **敏感性**：对丢帧、抽帧、插帧、以及 Deepfake 面部局部重动画（导致的背景/前景相对运动异常）高度敏感。
 
-# 安装依赖
-pip install -r requirements.txt
-```
+#### 4. 🧷 时序来源标记与 MV 惩罚 (Temporal Source Tag)
+在处理高级定向篡改（如 P/B 帧字节级篡改）时，由于攻击破坏了原编码视频的运动矢量结构，而合法的转码/重压缩则会保留有效的运动矢量（MV）。
+- **Tag = 'm'**：能提取到合法的 `motion_vectors`
+- **Tag = 'f'**：提取失败，回退到基于像素的光流估计（Farneback）
+- **MV Loss Penalty**：如果原始指纹的 Tag 是 `'m'`，但验证时重建的指纹变成 `'f'`，说明遭受了破坏编码结构的字节级攻击，验证器将触发 $+0.10$ 的刚性风险惩罚。
 
-#### 3. 启动MinIO存储
+### 指纹融合与加权风险判定
 
-```bash
-# 启动MinIO容器
-docker run -d \
-  -p 9000:9000 \
-  -p 9001:9001 \
-  --name minio \
-  -e "MINIO_ROOT_USER=minioadmin" \
-  -e "MINIO_ROOT_PASSWORD=minioadmin" \
-  minio/minio server /data --console-address ":9001"
+三个模态分别通过不同种子的 **LSH 投影矩阵** 降维，拼接成最终 256 位指纹：
+`VIF = hash_vis (64bit) || hash_sem (64bit) || hash_tem (128bit) || tag (8bit)`
 
-# 访问 http://localhost:9001 创建 bucket: video-evidence
-```
+在最终的防篡改**三态判定 (Tri-State Verification)** 中，系统对旧指纹与新指纹逐位计算 Hamming 距离（$D_{vis}, D_{sem}, D_{tem}$），并套用公式：
 
-#### 4. 启动Hyperledger Fabric网络
+$$ Risk = 0.35 \times D_{vis} + 0.40 \times D_{sem} + 0.25 \times D_{tem} + MV\_Penalty $$
 
-```bash
-cd fabric-samples/test-network
-
-# 启动网络
-./network.sh up createChannel -ca -s couchdb
-
-# 部署智能合约
-./network.sh deployCC -ccn cctv -ccp ../../chaincode -ccl go
-
-cd ../..
-```
-
-#### 5. 配置环境变量
-
-创建 `.env` 文件：
-
-```bash
-# MinIO配置
-MINIO_ENDPOINT=localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET_NAME=video-evidence
-
-# Fabric配置
-FABRIC_SAMPLES_PATH=./fabric-samples
-CHANNEL_NAME=mychannel
-CHAINCODE_NAME=cctv
-
-# AI模型配置
-SEMANTIC_MODEL_PATH=yolov8n.pt
-SEMANTIC_CONFIDENCE=0.5
-
-# 视频源（可选，用于测试）
-VIDEO_SOURCE=sample_videos/test.mp4
-```
-
-#### 6. 运行测试
-
-```bash
-# 测试GOP切分
-python -m services.gop_splitter --file sample_videos/test.mp4
-
-# 测试Merkle树构建
-python -m pytest tests/test_hierarchical_merkle.py -v
-
-# 测试自适应锚定
-python -m pytest tests/test_adaptive_anchor.py -v
-
-# 端到端验证测试
-python -m pytest tests/test_gop_verification_e2e.py -v
-```
-
-#### 7. 启动服务
-
-```bash
-# 终端1: 启动网关服务
-python gateway/gateway_service.py
-
-# 终端2: 启动设备模拟器（测试用）
-python gateway/simulate_devices.py
-
-# 终端3: 运行视频检测（可选）
-python detect.py --source sample_videos/test.mp4
-```
+- **INTACT (完整) ✅**：原始 SHA-256 完美匹配。
+- **RE-ENCODED (重压缩/合法转码) ⚠️**：SHA 不匹配，但 $Risk$ 小于阈值 $<0.15$。判定为由于磁盘优化导致的合法画质降低，内容逻辑未变。
+- **TAMPERED (恶意篡改) ❌**：$Risk \ge 0.15$ 或触发语义预警。检测到帧替换、换脸、目标擦除、字节注入等攻击。
 
 ---
 
-## 📦 核心模块
+## 🤖 核心技术二：MAB 强化学习自适应上链
 
-### 1. GOP切分模块 (`services/gop_splitter.py`)
+如果将监控摄像头产生的所有视频哈希都无差别存入 Hyperledger Fabric 联盟链，将产生不可接受的 TPS 压力与存储成本。但在夜间或死角等长时间无事件发生的场景中，高频上链毫无意义。
 
-按GOP（Group of Pictures）切分视频流，提取关键帧和原始编码字节。
+本项目在边缘端引入了**多臂老虎机 (Multi-Armed Bandit, MAB)** 辅助决策系统。
 
-```python
-from services.gop_splitter import split_gops
+### 动态锚定引擎 (Adaptive Anchor)
 
-# 切分视频
-gops = split_gops("video.mp4")
+边缘 AI (YOLO) 解析当前监控画面的目标活跃度（EIS: Event Importance Score）。基于 EIS，系统动态调整将 Merkle 树 SegmentRoot 推送上链的频率（称之为：挂锚点 Anchor）。
 
-for gop in gops:
-    print(f"GOP {gop.gop_id}: {gop.frame_count} frames, {gop.byte_size} bytes")
-    print(f"SHA-256: {gop.sha256_hash}")
-```
-
-**关键特性**：
-- 使用pyav库实现零拷贝GOP切分
-- 同时提取关键帧图像供后续pHash和YOLO使用
-- 记录完整元数据（时间戳、帧数、字节大小）
-
-### 2. 三重哈希计算
-
-#### 密码学哈希 (`services/crypto_utils.py`)
-
-```python
-from services.crypto_utils import compute_sha256
-
-# 对GOP原始字节计算SHA-256
-crypto_hash = compute_sha256(gop.raw_bytes)
-```
-
-#### 感知哈希 (`services/perceptual_hash.py`)
-
-```python
-from services.perceptual_hash import compute_phash
-
-# 对关键帧计算pHash（容忍转码）
-phash = compute_phash(gop.keyframe_image)
-```
-
-#### 语义哈希 (`services/semantic_fingerprint.py`)
-
-```python
-from services.semantic_fingerprint import SemanticFingerprint
-
-# 使用YOLOv8提取语义指纹
-semantic = SemanticFingerprint.from_image(
-    gop.keyframe_image,
-    gop_id=gop.gop_id
-)
-print(f"检测到: {semantic.total_count} 个目标")
-print(f"类别分布: {semantic.class_counts}")
-```
-
-### 3. 三级Merkle树 (`services/merkle_utils.py`)
-
-```python
-from services.merkle_utils import HierarchicalMerkleTree
-
-# 创建三级Merkle树
-tree = HierarchicalMerkleTree()
-
-# 添加GOP叶子节点
-for gop in gops:
-    combined_hash = crypto_hash + phash + semantic_hash
-    tree.add_gop_leaf(gop.gop_id, combined_hash, gop.timestamp)
-
-# 获取SegmentRoot（5分钟）
-segment_root = tree.get_segment_root()
-```
-
-**树结构**：
-```
-SegmentRoot (5min)
-├── ChunkRoot_0 (30s)
-│   ├── GOP_0
-│   ├── GOP_1
-│   └── ...
-├── ChunkRoot_1 (30s)
-│   └── ...
-└── ...
-```
-
-### 4. 自适应锚定 (`services/adaptive_anchor.py`)
-
-根据场景活跃度动态调整上报频率。
-
-```python
-from services.adaptive_anchor import AdaptiveAnchor
-
-anchor = AdaptiveAnchor(
-    window_size=10,        # 滑动窗口大小
-    upgrade_confirm=3,     # 升级确认次数
-    downgrade_confirm=5    # 降级确认次数
-)
-
-# 处理每个GOP的语义指纹
-decision = anchor.process(semantic)
-
-if decision.should_report_now:
-    print(f"触发上报: level={decision.level}, interval={decision.report_interval_seconds}s")
-    # 上报SegmentRoot到网关
-```
-
-**EIS评分规则**：
-- `total_count == 0` → EIS = 0.1（低活跃）
-- `1 <= total_count <= 5` → EIS = 0.5（中活跃）
-- `total_count > 5` → EIS = 0.9（高活跃）
-
-**上报间隔**：
-- LOW: 300秒（5分钟）
-- MEDIUM: 60秒（1分钟）
-- HIGH: 10秒
-
-### 5. 网关服务 (`gateway/gateway_service.py`)
-
-聚合多设备上报，构建EpochMerkleTree并上链。
-
-```python
-# 启动网关
-python gateway/gateway_service.py
-
-# API端点
-POST /report  # 接收设备SegmentRoot上报
-GET /health   # 健康检查
-```
-
-**网关功能**：
-- 接收多设备SegmentRoot上报
-- 每30秒构建EpochMerkleTree
-- 提交EpochRoot到Fabric链
-- SQLite存储历史记录
-
-### 6. MinIO存储 (`services/minio_storage.py`)
-
-```python
-from services.minio_storage import MinIOStorage
-
-storage = MinIOStorage()
-
-# 上传GOP视频分片
-cid = storage.upload_gop(gop.raw_bytes, gop.gop_id)
-
-# 上传语义JSON
-semantic_cid = storage.upload_semantic(semantic.to_json(), gop.gop_id)
-
-# 下载验证
-downloaded = storage.download_gop(cid)
-```
-
-### 7. 三态验证器 (`services/tri_state_verifier.py`)
-
-```python
-from services.tri_state_verifier import TriStateVerifier, VerificationResult
-
-verifier = TriStateVerifier(
-    phash_threshold=10  # Hamming距离阈值
-)
-
-# 验证GOP
-result = verifier.verify_gop(
-    original_crypto_hash=original_hash,
-    original_phash=original_phash,
-    current_crypto_hash=current_hash,
-    current_phash=current_phash
-)
-
-if result == VerificationResult.INTACT:
-    print("✅ 完整：未被篡改")
-elif result == VerificationResult.RE_ENCODED:
-    print("⚠️ 转码：内容未变但编码格式改变")
-elif result == VerificationResult.TAMPERED:
-    print("❌ 篡改：内容已被修改")
-```
+- **可选策略臂 (Arms)**：包含 `[每 1 GOP, 每 2 GOP, 每 5 GOP, 每 10 GOP]` 锚定一次四种频率。
+- **UCB1 / Thompson Sampling**：系统通过实时探索与利用（Explore & Exploit）。当场景中发生高价值事件（如大量人群聚集），模型算法不仅调高锚定频率（每 1 GOP上链一次，约延迟1秒），并惩罚低频臂；反之在空闲时，选择最低频臂（每 10 GOP 上链一次）降低成本。
+- **成果**：在保证安全审计实时性的同时，可节约 **90% - 95%** 的区块链读写与存储开销。
 
 ---
 
-## 🔧 API文档
-
-### 网关API
-
-#### 1. 提交SegmentRoot上报
-
-```http
-POST /report
-Content-Type: application/json
-
-{
-  "device_id": "cam_001",
-  "segment_root": "abc123...",
-  "timestamp": "2024-03-16T10:30:00Z",
-  "semantic_summaries": [
-    "检测到3辆车",
-    "检测到2个行人"
-  ],
-  "gop_count": 150
-}
-```
-
-**响应**：
-```json
-{
-  "status": "success",
-  "message": "Report received",
-  "device_id": "cam_001"
-}
-```
-
-#### 2. 健康检查
-
-```http
-GET /health
-```
-
-**响应**：
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-03-16T10:30:00Z"
-}
-```
-
-### 智能合约API
-
-#### 1. 存储EpochRoot
-
-```go
-// 调用AnchorContract
-peer chaincode invoke -C mychannel -n cctv \
-  -c '{"function":"StoreEpochRoot","Args":["epoch_001","root_hash","signature"]}'
-```
-
-#### 2. 验证Merkle路径
-
-```go
-// 调用VerifyContract
-peer chaincode query -C mychannel -n cctv \
-  -c '{"function":"VerifyMerklePath","Args":["epoch_001","gop_hash","merkle_path"]}'
-```
-
----
-
-## 🧪 测试
-
-### 单元测试
-
-```bash
-# 测试所有模块
-python -m pytest tests/ -v
-
-# 测试特定模块
-python -m pytest tests/test_adaptive_anchor.py -v
-python -m pytest tests/test_hierarchical_merkle.py -v
-python -m pytest tests/test_tri_state_verifier.py -v
-
-# VIF 多模态融合指纹测试
-VIF_MODE=fusion python -m pytest tests/test_vif.py -v
-
-# MAB 自适应锚定测试
-ANCHOR_MODE=mab_ucb python -m pytest tests/test_mab_anchor.py -v
-
-# 完整版 EIS 测试
-python -m pytest tests/test_full_eis.py -v
-
-# 深度感知哈希测试
-PHASH_MODE=deep python -m pytest tests/test_deep_phash.py -v
-```
-
-### 回归测试
-
-```bash
-# 确保新功能不影响现有系统
-python -m pytest tests/test_perceptual_hash.py tests/test_merkle_utils.py \
-  tests/test_hierarchical_merkle.py tests/test_adaptive_anchor.py -v
-```
-
-### 性能测试
-
-```bash
-# 测试GOP切分性能
-python -m services.gop_splitter --file large_video.mp4 --benchmark
-
-# 测试Merkle树构建性能
-python tests/benchmark_merkle.py
-```
-
----
-
-## 📊 性能指标
-
-### 边缘设备性能
-
-- **GOP切分速度**：实时处理1080p@30fps视频流
-- **YOLOv8-nano推理**：~15ms/帧（GPU），~50ms/帧（CPU）
-- **Merkle树构建**：<10ms（1000个GOP）
-- **内存占用**：~500MB（包含模型）
-
-### 网关性能
-
-- **并发设备数**：支持10+设备同时上报
-- **Epoch构建时间**：<100ms（10设备）
-- **SQLite写入速度**：1000+ TPS
-
-### 区块链性能
-
-- **交易吞吐量**：~100 TPS（单机Docker）
-- **区块确认时间**：~2秒
-- **存储优化**：相比逐GOP上链减少95%交易数
-
----
-
-## 🛠️ 配置说明
-
-### 环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `MINIO_ENDPOINT` | `localhost:9000` | MinIO服务地址 |
-| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO访问密钥 |
-| `MINIO_SECRET_KEY` | `minioadmin` | MinIO密钥 |
-| `MINIO_BUCKET_NAME` | `video-evidence` | 存储桶名称 |
-| `FABRIC_SAMPLES_PATH` | `./fabric-samples` | Fabric网络路径 |
-| `CHANNEL_NAME` | `mychannel` | 通道名称 |
-| `CHAINCODE_NAME` | `cctv` | 智能合约名称 |
-| `SEMANTIC_MODEL_PATH` | `yolov8n.pt` | YOLO模型路径 |
-| `SEMANTIC_CONFIDENCE` | `0.5` | 检测置信度阈值 |
-| `PHASH_HAMMING_THRESHOLD` | `10` | pHash相似度阈值 |
-| `PHASH_MODE` | `legacy` | 感知哈希模式（`legacy`/`deep`） |
-| `VIF_MODE` | `off` | VIF 融合指纹模式（`off`/`phash_only`/`semantic_only`/`fusion`） |
-| `VIF_PHASH_WEIGHT` | `0.4` | VIF 感知哈希权重 |
-| `VIF_SEMANTIC_WEIGHT` | `0.35` | VIF 语义特征权重 |
-| `VIF_TEMPORAL_WEIGHT` | `0.25` | VIF 时序特征权重 |
-| `EIS_MODE` | `lite` | EIS 计算模式（`lite`/`full`） |
-| `ANCHOR_MODE` | `fixed` | 锚定策略（`fixed`/`mab_ucb`/`mab_thompson`） |
-
-### 自适应锚定配置
-
-```python
-# config.py
-ADAPTIVE_ANCHOR_CONFIG = {
-    "window_size": 10,           # 滑动窗口大小
-    "upgrade_confirm": 3,        # 升级确认次数（快升）
-    "downgrade_confirm": 5,      # 降级确认次数（慢降）
-    "low_threshold": 0.3,        # 低活跃度阈值
-    "high_threshold": 0.7,       # 高活跃度阈值
-    "interval_low": 300,         # 低活跃上报间隔（秒）
-    "interval_medium": 60,       # 中活跃上报间隔（秒）
-    "interval_high": 10          # 高活跃上报间隔（秒）
-}
-```
-
----
-
-## 🔍 故障排查
-
-### 常见问题
-
-#### 1. MinIO连接失败
-
-```bash
-# 检查MinIO容器状态
-docker ps | grep minio
-
-# 查看日志
-docker logs minio
-
-# 重启容器
-docker restart minio
-```
-
-#### 2. Fabric网络启动失败
-
-```bash
-# 清理旧网络
-cd fabric-samples/test-network
-./network.sh down
-
-# 清理Docker卷
-docker volume prune
-
-# 重新启动
-./network.sh up createChannel -ca -s couchdb
-```
-
-#### 3. YOLO模型加载失败
-
-```bash
-# 手动下载模型
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt
-
-# 或使用国内镜像
-pip install ultralytics -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-#### 4. GOP切分失败
-
-```bash
-# 检查视频文件格式
-ffprobe video.mp4
-
-# 确保安装了pyav
-pip install av
-
-# 测试切分
-python -m services.gop_splitter --file video.mp4 --debug
-```
-
----
-
-## 📚 项目结构
-
-```
-CCTV-W-FABRIC-main/
-├── chaincode/                  # 智能合约（Go）
-│   ├── chaincode.go           # 主合约逻辑（Anchor / VerifyAnchor / VerifyEvent）
-│   ├── chaincode_test.go      # 合约单元测试
-│   └── go.mod
-├── services/                   # 核心服务模块
-│   ├── gop_splitter.py        # GOP切分 + 哈希计算 + VIF 计算
-│   ├── perceptual_hash.py     # 感知哈希（legacy pHash + deep MobileNetV3+LSH）
-│   ├── semantic_fingerprint.py # YOLOv8 语义指纹
-│   ├── vif.py                 # 🆕 多模态融合指纹 VIF
-│   ├── merkle_utils.py        # Merkle树工具（叶子哈希 / 树构建 / 证明）
-│   ├── adaptive_anchor.py     # 自适应锚定（EIS lite/full + MAB 集成）
-│   ├── mab_anchor.py          # 🆕 MAB 锚定策略（UCB1 + Thompson Sampling）
-│   ├── tri_state_verifier.py  # 三态验证
-│   ├── minio_storage.py       # MinIO存储
-│   ├── gop_verifier.py        # GOP验证器
-│   ├── gateway_service.py     # 网关服务
-│   ├── fabric_client.py       # Fabric客户端
-│   ├── crypto_utils.py        # 密码学哈希
-│   ├── detection_service.py   # YOLO 检测服务
-│   ├── event_aggregator.py    # 事件聚合
-│   └── workorder_service.py   # 工单服务
-├── gateway/                    # 网关层
-│   ├── gateway_service.py     # 网关主服务
-│   ├── simulate_devices.py    # 设备模拟器
-│   └── README.md / README_CN.md
-├── tests/                      # 测试文件（111+ 测试用例）
-│   ├── test_perceptual_hash.py    # 感知哈希测试 (11)
-│   ├── test_deep_phash.py         # 深度 pHash 测试 (5)
-│   ├── test_vif.py                # 🆕 VIF 融合指纹测试 (32)
-│   ├── test_semantic_fingerprint.py # 语义指纹测试 (13)
-│   ├── test_merkle_utils.py       # Merkle树测试 (20)
-│   ├── test_hierarchical_merkle.py # 三级 Merkle 测试 (9)
-│   ├── test_adaptive_anchor.py    # 自适应锚定测试 (15)
-│   ├── test_full_eis.py           # 完整版 EIS 测试 (18)
-│   ├── test_mab_anchor.py         # 🆕 MAB 锚定测试 (24)
-│   ├── test_tri_state_verifier.py  # 三态验证测试 (11)
-│   ├── test_gop_verification_e2e.py # 端到端验证测试
-│   ├── test_anchor_integration.py  # 链上锚定集成测试
-│   └── test_epoch_merkle.py       # Epoch Merkle 测试 (11)
-├── scripts/                    # 工具脚本
-│   ├── ablation_phash.py      # pHash 消融实验
-│   ├── ablation_eis.py        # EIS 消融实验
-│   └── tamper_demo.py         # 篡改检测演示
-├── config.py                   # 配置文件
-├── detect.py                   # 视频检测脚本
-├── verify_evidence.py          # 证据验证脚本
-├── web_app.py                  # Web 服务 + 网关 API
-├── anchor_to_fabric.py         # Fabric 锚定脚本
-├── requirements.txt            # Python依赖
-├── CHANGELOG.md                # 更新日志
-└── README.md                   # 本文档
-```
-
----
-
-## 🗺️ 开发路线图
-
-### ✅ 已完成
-
-- [x] GOP级视频切分
-- [x] 三重哈希计算（SHA-256 + pHash + Semantic）
-- [x] 深度感知哈希（MobileNetV3 + LSH）
-- [x] 多模态融合指纹 VIF（感知 + 语义 + 时序光流）
-- [x] 三级Merkle树（GOP → Chunk → Segment）
-- [x] 自适应锚定（EIS评分 lite + full）
-- [x] 完整版 EIS（光流 + 异常检测 + 规则引擎）
-- [x] MAB 自适应锚定（UCB1 + Thompson Sampling）
-- [x] MinIO分布式存储
-- [x] 网关聚合服务
-- [x] Fabric智能合约
-- [x] 三态验证器
-- [x] 端到端测试（111+ 测试用例）
-- [x] 消融实验脚本（pHash / EIS）
-- [x] 篡改检测演示脚本
-
-### 🚧 进行中
-
-- [ ] Web管理界面
-- [ ] 实时视频流处理
-- [ ] 设备私钥签名机制
-
-### 📋 计划中
-
-- [ ] IPFS集群部署（替代MinIO）
-- [ ] RTP字节级GOP切分
-- [ ] 多链互操作
-- [ ] 移动端验证APP
-
----
-
-## 🤝 贡献指南
-
-欢迎提交Issue和Pull Request！
-
-### 贡献流程
-
-1. Fork本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启Pull Request
-
-### 代码规范
-
-- 遵循PEP 8 Python代码风格
-- 添加必要的注释和文档字符串
-- 编写单元测试覆盖新功能
-- 更新相关文档
-
----
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
----
-
-## 📮 联系方式
-
-- **作者**：NgokzittYu
-- **邮箱**：yyzbill1106@gmail.com
-- **项目地址**：https://github.com/NgokzittYu/CCTV-W-FABRIC
-
----
-
-## 📝 更新日志
+## 📝 版本更新
+
+### v1.4.0 (2026-03-24 ~ 2026-03-25)
+✅ 压缩域运动矢量 (MV)：提取 192d 运动特征与时序来源标记 (Temporal Source Tag)
+✅ P/B 帧高级篡改检测：引入 MV Loss 刚性惩罚机制
+✅ 交互式可视化：前端 Merkle 树动态交互与哈希完整下钻显示
+✅ 架构重构：Demo 重签发管线与 VIF 算法三模态解耦
 
 ### v1.3.0 (2026-03-23)
-
-- ✅ **多模态融合指纹 VIF**：感知哈希 + 语义特征 + 时序光流 → 256 位融合指纹
-- ✅ **MAB 自适应锚定**：UCB1 / Thompson Sampling 动态学习最优锚定间隔
+✅ 多模态融合指纹 VIF：感知哈希 + 语义特征 + 时序光流 → 256 位融合指纹
+✅ MAB 自适应锚定：UCB1 / Thompson Sampling 动态学习最优锚定间隔
 
 ### v1.2.0 (2026-03-23)
-
-- ✅ **完整版 EIS**：光流运动分析 + 统计异常检测 + 规则引擎加权融合
-- ✅ **深度感知哈希升级**：MobileNetV3-Small + LSH 压缩
+✅ 完整版 EIS：光流运动分析 + 统计异常检测 + 规则引擎加权融合
+✅ 深度感知哈希升级：MobileNetV3-Small + LSH 压缩
 
 ### v1.1.0 (2026-03-16 ~ 2026-03-17)
-
-- ✅ 语义指纹与组合验证
-- ✅ 网关聚合服务（EpochMerkleTree）
-- ✅ 自适应锚定模块（EIS 评分）
-- ✅ GOP 验证与三态验证器
-- ✅ 篡改检测演示脚本
+✅ 语义指纹与组合验证
+✅ 网关聚合服务（EpochMerkleTree）
+✅ 自适应锚定模块（EIS 评分）
+✅ GOP 验证与三态验证器
+✅ 篡改检测演示脚本
 
 ### v1.0.0 (2026-03-13 ~ 2026-03-15)
-
-- ✅ GOP 级视频切分 + 三重哈希计算
-- ✅ Merkle 树类封装（序列化 + 证明）
-- ✅ MinIO 分布式存储集成
-- ✅ Fabric 智能合约（Anchor / VerifyAnchor）
-- ✅ 端到端测试
+✅ GOP 级视频切分 + 三重哈希计算
+✅ Merkle 树类封装（序列化 + 证明）
+✅ MinIO 分布式存储集成
+✅ Fabric 智能合约（Anchor / VerifyAnchor）
+✅ 端到端测试
 
 > 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
-## 🙏 致谢
+## ⚖️ License
 
-- [Hyperledger Fabric](https://www.hyperledger.org/use/fabric) - 企业级区块链框架
-- [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) - 实时目标检测
-- [PyAV](https://github.com/PyAV-Org/PyAV) - Python视频处理
-- [MinIO](https://min.io/) - 高性能对象存储
-- [ImageHash](https://github.com/JohannesBuchner/imagehash) - 感知哈希库
-
----
-
-<div align="center">
-
-**⭐ 如果这个项目对你有帮助，请给个Star！⭐**
-
-Made with ❤️ by NgokzittYu
-
-</div>
+MIT License. See `LICENSE` for more information.

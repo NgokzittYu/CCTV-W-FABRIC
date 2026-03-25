@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from services.perceptual_hash import compute_phash, hamming_distance
 from services.merkle_utils import compute_leaf_hash, MerkleTree
-from services.tri_state_verifier import TriStateVerifier
+from services.tri_state_verifier import TriStateVerifier, TriStateVerifierV2
 from services.mab_anchor import MABAnchorManager, ARM_INTERVALS
 from services.gop_splitter import split_gops
 from benchmarks.datasets import apply_tamper
@@ -275,6 +275,158 @@ def api_analyze():
 # 全局存储：篡改结果（用于 detect 对比）
 _tamper_store: dict = {}
 
+
+def _reencode_gop_tampered(
+    gop,
+    tamper_fn,
+    vif_config=None,
+):
+    """解码 GOP 全帧 → 逐帧篡改 → PyAV 重编码 → 提取 MV + 计算 VIF。
+
+    Args:
+        gop: GOPData 对象（含 keyframe_frame, raw_bytes 等）
+        tamper_fn: Callable(frame) -> tampered_frame，像素级篡改函数
+        vif_config: VIFConfig（为 None 则自动读取）
+
+    Returns:
+        dict: {sha256, phash, vif, keyframe, motion_vectors}
+    """
+    import av as _av
+    import io as _io
+    from services.vif import VIFConfig, compute_vif
+
+    if vif_config is None:
+        vif_config = VIFConfig()
+
+    # ── 1. 解码原始 GOP 所有帧 ──
+    orig_frames = [gop.keyframe_frame]
+    try:
+        container = _av.open(_io.BytesIO(gop.raw_bytes))
+        vs = container.streams.video[0]
+        count = 0
+        for pkt in container.demux(vs):
+            if pkt.size == 0:
+                continue
+            try:
+                for frm in vs.codec_context.decode(pkt):
+                    count += 1
+                    if count > 1:  # 跳过 keyframe（已有）
+                        orig_frames.append(frm.to_ndarray(format="bgr24"))
+            except Exception:
+                pass
+        container.close()
+    except Exception:
+        pass
+
+    # ── 2. 逐帧篡改 ──
+    tampered_frames = [tamper_fn(f) for f in orig_frames]
+
+    # ── 3. PyAV 重编码为合法 H.264 ──
+    h, w = tampered_frames[0].shape[:2]
+    buf = _io.BytesIO()
+    try:
+        out = _av.open(buf, mode='w', format='mp4')
+        vstream = out.add_stream('libx264', rate=30)
+        vstream.width = w
+        vstream.height = h
+        vstream.pix_fmt = 'yuv420p'
+        vstream.options = {'preset': 'ultrafast', 'crf': '23'}
+
+        for tf in tampered_frames:
+            av_frame = _av.VideoFrame.from_ndarray(tf, format='bgr24')
+            for packet in vstream.encode(av_frame):
+                out.mux(packet)
+        for packet in vstream.encode():
+            out.mux(packet)
+        out.close()
+    except Exception as e:
+        print(f"[REENCODE] 编码失败: {e}")
+        # 回退：直接用篡改后 keyframe 的 SHA
+        t_sha = hashlib.sha256(tampered_frames[0].tobytes()).hexdigest()
+        return {
+            "sha256": t_sha,
+            "phash": compute_phash(tampered_frames[0]),
+            "vif": compute_vif(tampered_frames, vif_config) if vif_config.mode != "off" else None,
+            "keyframe": tampered_frames[0],
+        }
+
+    raw_bytes = buf.getvalue()
+    t_sha = hashlib.sha256(raw_bytes).hexdigest()
+
+    # ── 4. 重新打开以提取 MV ──
+    mvs = []
+    decoded_frames = []
+    try:
+        container2 = _av.open(_io.BytesIO(raw_bytes))
+        vs2 = container2.streams.video[0]
+        vs2.codec_context.flags2 |= (1 << 28)  # AV_CODEC_FLAG2_EXPORT_MVS
+        _tw = vs2.codec_context.width or w
+        _th = vs2.codec_context.height or h
+        for pkt in container2.demux(vs2):
+            if pkt.size == 0:
+                continue
+            try:
+                for frm in vs2.codec_context.decode(pkt):
+                    decoded_frames.append(frm.to_ndarray(format="bgr24"))
+                    try:
+                        sd = frm.side_data
+                        if sd:
+                            for item in sd:
+                                if 'MOTION' in str(item.type).upper():
+                                    arr = item.to_ndarray()
+                                    for row in arr:
+                                        mvs.append({
+                                            'src_x': int(row['src_x']),
+                                            'src_y': int(row['src_y']),
+                                            'motion_x': int(row['motion_x']),
+                                            'motion_y': int(row['motion_y']),
+                                            'motion_scale': int(row['motion_scale']),
+                                            'w': int(row['w']),
+                                            'h': int(row['h']),
+                                        })
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        container2.close()
+    except Exception as e:
+        print(f"[REENCODE] MV 提取失败: {e}")
+
+    # ── 5. 计算 VIF（带 MV 标记）──
+    # 关键：帧采样必须与 _build_gop 一致（keyframe + VIF_SAMPLE_FRAMES 采样帧）
+    # 否则 Farneback 特征维度不同 → D_tem ≈ 0.50
+    t_vif = None
+    if vif_config.mode != "off":
+        all_frames = decoded_frames if decoded_frames else tampered_frames
+        vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "3"))
+        if len(all_frames) > 1 + vif_sample_n:
+            # 均匀采样，与 _sample_extra_frames 逻辑一致
+            total_extra = len(all_frames) - 1
+            step = total_extra / vif_sample_n
+            sampled_indices = [int(i * step) + 1 for i in range(vif_sample_n)]
+            vif_frames = [all_frames[0]] + [all_frames[idx] for idx in sampled_indices]
+        else:
+            vif_frames = all_frames
+        try:
+            t_vif = compute_vif(
+                vif_frames, vif_config,
+                motion_vectors=mvs,
+                frame_width=_tw if mvs else 0,
+                frame_height=_th if mvs else 0,
+                fps=30.0,
+            )
+        except Exception:
+            pass
+
+    keyframe = decoded_frames[0] if decoded_frames else tampered_frames[0]
+
+    return {
+        "sha256": t_sha,
+        "phash": compute_phash(keyframe),
+        "vif": t_vif,
+        "keyframe": keyframe,
+    }
+
 @app.route("/api/tamper", methods=["POST"])
 def api_tamper():
     """生成篡改视频帧，保存到内存供检测对比。"""
@@ -320,18 +472,22 @@ def api_tamper():
 
                 tampered_sha256 = hashlib.sha256(bytes(raw)).hexdigest()
 
-                # 重新计算 VIF（用篡改后的字节解码帧）
+                # 重新计算 VIF（用篡改后的字节解码帧 + 收集 MV）
                 tampered_vif = None
                 try:
                     from services.vif import VIFConfig, compute_vif
                     vif_config = VIFConfig()
                     if vif_config.mode != "off":
-                        # 尝试从篡改后的字节解码帧用于光流
                         import io as _io
                         tampered_frames_list = [gop.keyframe_frame]  # I帧不变
+                        tampered_mvs = []
                         try:
                             container = _av.open(_io.BytesIO(bytes(raw)))
                             vs = container.streams.video[0]
+                            vs.codec_context.flags2 |= (1 << 28)
+                            _tw = vs.codec_context.width or 1920
+                            _th = vs.codec_context.height or 1080
+                            _tfps = float(vs.average_rate) if vs.average_rate else 30.0
                             decoded_count = 0
                             for pkt in container.demux(vs):
                                 if pkt.size == 0:
@@ -341,12 +497,37 @@ def api_tamper():
                                         decoded_count += 1
                                         if decoded_count > 1 and decoded_count % 5 == 0:
                                             tampered_frames_list.append(frm.to_ndarray(format="bgr24"))
+                                        # 收集 MV
+                                        try:
+                                            sd = frm.side_data
+                                            if sd:
+                                                for sd_item in sd:
+                                                    if hasattr(sd_item, 'type') and 'MOTION' in str(sd_item.type):
+                                                        mv_arr = sd_item.to_ndarray()
+                                                        for mv_row in mv_arr:
+                                                            tampered_mvs.append({
+                                                                'src_x': int(mv_row['src_x']),
+                                                                'src_y': int(mv_row['src_y']),
+                                                                'motion_x': int(mv_row['motion_x']),
+                                                                'motion_y': int(mv_row['motion_y']),
+                                                                'motion_scale': int(mv_row['motion_scale']),
+                                                                'w': int(mv_row['w']),
+                                                                'h': int(mv_row['h']),
+                                                            })
+                                        except Exception:
+                                            pass
                                 except Exception:
                                     pass
                             container.close()
                         except Exception:
                             pass
-                        tampered_vif = compute_vif(tampered_frames_list, vif_config)
+                        tampered_vif = compute_vif(
+                            tampered_frames_list, vif_config,
+                            motion_vectors=tampered_mvs,
+                            frame_width=_tw if tampered_mvs else 0,
+                            frame_height=_th if tampered_mvs else 0,
+                            fps=_tfps if tampered_mvs else 30.0,
+                        )
                 except Exception:
                     pass
 
@@ -377,7 +558,8 @@ def api_tamper():
             "tampered_gop_info": tampered_gop_info,
         }
     else:
-        # ─── I 帧篡改逻辑（统一使用 gop_level 模式） ───
+        # ─── 像素级篡改 + MV tag 一致性 ───
+        # 对 keyframe 施加篡改，传原始 MV 确保 tag='m' 匹配
         from services.vif import VIFConfig, compute_vif
 
         vif_config = VIFConfig()
@@ -401,7 +583,14 @@ def api_tamper():
                 t_vif = None
                 if vif_config.mode != "off":
                     try:
-                        t_vif = compute_vif([t_frame], vif_config)
+                        # 传原始 MV 确保 tag 一致（tag='m' → tag='m'）
+                        # 避免 MV loss 假阳惩罚
+                        t_vif = compute_vif(
+                            [t_frame], vif_config,
+                            motion_vectors=gop.motion_vectors or [],
+                            frame_width=kf.shape[1] if gop.motion_vectors else 0,
+                            frame_height=kf.shape[0] if gop.motion_vectors else 0,
+                        )
                     except Exception:
                         pass
 
@@ -458,58 +647,46 @@ def api_detect():
         store = _tamper_store[tamper_id]
 
         if store.get("mode") == "gop_level":
-            # ─── 统一的 GOP 级别对比（所有篡改类型） ───
+            # ─── 统一的 GOP 级别对比（VIF v2 加权评分） ───
             orig_list = store["orig_gop_info"]
             tampered_list = store["tampered_gop_info"]
-            verifier = TriStateVerifier(hamming_threshold=5)
+            verifier = TriStateVerifierV2()
             comparisons = []
 
             for i in range(min(len(orig_list), len(tampered_list))):
                 o = orig_list[i]
                 t = tampered_list[i]
 
-                state = verifier.verify(o["sha256"], o["phash"], t["sha256"], t["phash"])
-
-                # VIF 增强：如果 pHash 判定为 RE_ENCODED，但 VIF 不匹配 → 升级为 TAMPERED
-                vif_match = None
-                if o.get("vif") and t.get("vif"):
-                    vif_dist = hamming_distance(o["vif"][:16], t["vif"][:16])
-                    vif_match = (vif_dist <= 5)
-                    if (state == "RE_ENCODED" or str(state) == "RE_ENCODED") and not vif_match:
-                        state = "TAMPERED"
-
-                state_str = state.name if hasattr(state, "name") else str(state)
-                dist = hamming_distance(o["phash"], t["phash"]) if o["phash"] and t["phash"] else -1
+                state, risk, details = verifier.verify(
+                    o["sha256"], t["sha256"],
+                    o.get("vif"), t.get("vif"),
+                )
 
                 comparisons.append({
                     "frame_index": i,
-                    "state": state_str,
-                    "hamming_distance": dist,
+                    "state": state,
+                    "risk_score": round(risk, 4),
+                    "d_vis": details.get("d_vis"),
+                    "d_sem": details.get("d_sem"),
+                    "d_tem": details.get("d_tem"),
                     "sha_match": o["sha256"] == t["sha256"],
-                    "vif_match": vif_match,
                     "orig_thumb": _frame_to_base64_bgr(o["keyframe"], max_width=160),
                     "suspect_thumb": _frame_to_base64_bgr(t["keyframe"], max_width=160),
                 })
         else:
-            # ─── 兼容旧格式的关键帧对比 ───
+            # ─── 兼容旧格式的关键帧对比（VIF v2） ───
             orig_frames = store["orig_keyframes"]
             suspect_frames = store["tampered_keyframes"]
-            verifier = TriStateVerifier(hamming_threshold=5)
             comparisons = []
 
             for i in range(min(len(orig_frames), len(suspect_frames))):
                 orig_sha = hashlib.sha256(orig_frames[i].tobytes()).hexdigest()
                 susp_sha = hashlib.sha256(suspect_frames[i].tobytes()).hexdigest()
-                orig_ph = compute_phash(orig_frames[i])
-                susp_ph = compute_phash(suspect_frames[i])
-
-                state = verifier.verify(orig_sha, orig_ph, susp_sha, susp_ph)
-                dist = hamming_distance(orig_ph, susp_ph) if orig_ph and susp_ph else -1
 
                 comparisons.append({
                     "frame_index": i,
-                    "state": state.name if hasattr(state, "name") else str(state),
-                    "hamming_distance": dist,
+                    "state": "INTACT" if orig_sha == susp_sha else "TAMPERED",
+                    "risk_score": 0.0 if orig_sha == susp_sha else 1.0,
                     "sha_match": orig_sha == susp_sha,
                     "orig_thumb": _frame_to_base64_bgr(orig_frames[i], max_width=160),
                     "suspect_thumb": _frame_to_base64_bgr(suspect_frames[i], max_width=160),
@@ -543,25 +720,29 @@ def api_detect():
         else:
             suspect_frames = orig_frames
 
-        verifier = TriStateVerifier(hamming_threshold=5)
+        # 使用 VIF v2 对 GOP 级别对比
+        verifier = TriStateVerifierV2()
         comparisons = []
 
-        for i in range(min(len(orig_frames), len(suspect_frames))):
-            orig_sha = hashlib.sha256(orig_frames[i].tobytes()).hexdigest()
-            susp_sha = hashlib.sha256(suspect_frames[i].tobytes()).hexdigest()
-            orig_ph = compute_phash(orig_frames[i])
-            susp_ph = compute_phash(suspect_frames[i])
+        for i in range(min(len(orig_gops), len(suspect_gops) if suspect_path else len(orig_gops))):
+            og = orig_gops[i]
+            sg = suspect_gops[i] if suspect_path and suspect_path.exists() else og
 
-            state = verifier.verify(orig_sha, orig_ph, susp_sha, susp_ph)
-            dist = hamming_distance(orig_ph, susp_ph) if orig_ph and susp_ph else -1
+            state, risk, details = verifier.verify(
+                og.sha256_hash, sg.sha256_hash,
+                og.vif, sg.vif,
+            )
 
             comparisons.append({
                 "frame_index": i,
-                "state": state.name if hasattr(state, "name") else str(state),
-                "hamming_distance": dist,
-                "sha_match": orig_sha == susp_sha,
-                "orig_thumb": _frame_to_base64_bgr(orig_frames[i], max_width=160),
-                "suspect_thumb": _frame_to_base64_bgr(suspect_frames[i], max_width=160),
+                "state": state,
+                "risk_score": round(risk, 4),
+                "d_vis": details.get("d_vis"),
+                "d_sem": details.get("d_sem"),
+                "d_tem": details.get("d_tem"),
+                "sha_match": og.sha256_hash == sg.sha256_hash,
+                "orig_thumb": _frame_to_base64_bgr(og.keyframe_frame, max_width=160),
+                "suspect_thumb": _frame_to_base64_bgr(sg.keyframe_frame, max_width=160),
             })
 
     # 总体判定

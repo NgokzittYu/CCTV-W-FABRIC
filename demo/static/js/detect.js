@@ -166,6 +166,8 @@ function renderDetectResults(data) {
     comp.innerHTML = data.comparisons.map(c => {
         const stateCls = c.state === 'INTACT' ? 'state-intact' : c.state === 'TAMPERED' ? 'state-tampered' : 'state-reencoded';
         const borderCls = c.state === 'TAMPERED' ? 'border-red-400' : c.state === 'RE_ENCODED' ? 'border-yellow-400' : 'border-green-200';
+        const riskColor = c.risk_score >= 0.15 ? 'text-red-500' : c.risk_score >= 0.10 ? 'text-yellow-500' : 'text-green-600';
+        const hasDetails = c.d_vis !== undefined && c.d_vis !== null;
         return `
             <div class="flex items-center gap-4 p-3 rounded-xl border ${borderCls} bg-white">
                 <img src="${c.orig_thumb}" class="w-20 h-14 object-cover rounded-lg" alt="原始">
@@ -179,8 +181,8 @@ function renderDetectResults(data) {
                     <div class="text-xs ${c.sha_match ? 'text-green-600' : 'text-red-500'}">
                         SHA: ${c.sha_match ? '匹配' : '不匹配'}
                     </div>
-                    <div class="text-xs text-gray-500">pHash Hamming: ${c.hamming_distance}</div>
-                    ${c.vif_match !== undefined && c.vif_match !== null ? `<div class="text-xs ${c.vif_match ? 'text-green-600' : 'text-red-500'}">VIF: ${c.vif_match ? '匹配' : '不匹配 ⚠️'}</div>` : ''}
+                    ${c.risk_score !== undefined ? `<div class="text-xs font-semibold ${riskColor}">Risk: ${c.risk_score.toFixed(4)}</div>` : ''}
+                    ${hasDetails ? `<div class="text-xs text-gray-500">Vis ${c.d_vis.toFixed(2)} Sem ${c.d_sem.toFixed(2)} Tem ${c.d_tem.toFixed(2)}</div>` : ''}
                 </div>
             </div>
         `;

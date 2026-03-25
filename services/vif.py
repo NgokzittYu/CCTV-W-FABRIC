@@ -237,6 +237,89 @@ def extract_temporal_feature(gop_frames: List[np.ndarray]) -> np.ndarray:
     return output
 
 
+# ── MV 特征维度 ──
+_MV_GRID_N = 8
+_MV_FEAT_DIM = _MV_GRID_N * _MV_GRID_N * 3  # 192
+
+
+def extract_temporal_feature_mv(
+    motion_vectors: list,
+    frame_width: int,
+    frame_height: int,
+    fps: float = 30.0,
+    grid_n: int = _MV_GRID_N,
+) -> np.ndarray:
+    """
+    从 H.264/H.265 压缩域运动矢量提取 8×8 网格化时空特征。
+
+    相比 Farneback 稠密光流：
+    - 天然抗压缩：MV 是编码器自身的宏块预测，合法转码后宏观趋势不变
+    - 零解码成本：直接从码流 side_data 读取，无需像素级计算
+    - 覆盖全帧：每个 P/B 帧的所有预测宏块都有 MV
+
+    特征设计：
+    - 速度归一化：(dx/width)*fps，抗分辨率缩放 + 抗帧率变化
+    - 面积加权：(w*h)/(W*H)，抗 H.265 动态宏块切分
+    - 网格池化：8×8=64 区块，保留空间运动分布（避免正负抵消）
+
+    Args:
+        motion_vectors: PyAV frame.side_data MOTION_VECTORS 数据列表
+                       每个元素需有属性: src_x, src_y, dst_x, dst_y, w, h
+        frame_width: 视频帧宽度（像素）
+        frame_height: 视频帧高度（像素）
+        fps: 视频帧率（用于速度归一化）
+        grid_n: 网格大小（默认 8×8）
+
+    Returns:
+        192 维特征向量 (8×8×3: abs_vel_x, abs_vel_y, magnitude)
+    """
+    grid = np.zeros((grid_n, grid_n, 4), dtype=np.float64)
+
+    if not motion_vectors or frame_width <= 0 or frame_height <= 0:
+        return grid[:, :, :3].flatten()
+
+    for mv in motion_vectors:
+        try:
+            src_x = float(mv['src_x']) if isinstance(mv, dict) else float(mv.src_x)
+            src_y = float(mv['src_y']) if isinstance(mv, dict) else float(mv.src_y)
+            w = float(mv['w']) if isinstance(mv, dict) else float(mv.w)
+            h = float(mv['h']) if isinstance(mv, dict) else float(mv.h)
+
+            # FFmpeg MV: motion_x/motion_y 是子像素运动位移（单位：1/motion_scale 像素）
+            motion_x = float(mv['motion_x']) if isinstance(mv, dict) else float(mv.motion_x)
+            motion_y = float(mv['motion_y']) if isinstance(mv, dict) else float(mv.motion_y)
+            motion_scale = float(mv['motion_scale']) if isinstance(mv, dict) else float(mv.motion_scale)
+            if motion_scale == 0:
+                motion_scale = 1.0
+
+            # 实际像素位移
+            dx = motion_x / motion_scale
+            dy = motion_y / motion_scale
+        except (AttributeError, KeyError, TypeError):
+            continue
+
+        # 速度归一化（抗分辨率 + 抗帧率）
+        vel_x = (dx / frame_width) * fps
+        vel_y = (dy / frame_height) * fps
+
+        # 面积加权（抗 H.265 动态宏块切分）
+        area_w = (w * h) / (frame_width * frame_height)
+
+        # 定位网格
+        gx = min(max(int(src_x / frame_width * grid_n), 0), grid_n - 1)
+        gy = min(max(int(src_y / frame_height * grid_n), 0), grid_n - 1)
+
+        # 加权累积
+        grid[gy, gx, 0] += abs(vel_x) * area_w
+        grid[gy, gx, 1] += abs(vel_y) * area_w
+        grid[gy, gx, 2] += np.sqrt(vel_x**2 + vel_y**2) * area_w
+        grid[gy, gx, 3] += area_w
+
+    # 归一化为加权平均
+    counts = grid[:, :, 3:4].clip(min=1e-8)
+    return (grid[:, :, :3] / counts).flatten()  # 192d
+
+
 # ── 特征融合 ──────────────────────────────────────────────────────────
 
 class _VIFLSHProjector:
@@ -254,13 +337,24 @@ class _VIFLSHProjector:
                     cls._instance = cls()
         return cls._instance
 
-    def project(self, feature: np.ndarray, output_bits: int) -> str:
-        """将特征向量 LSH 投影到 output_bits 位，返回十六进制字符串。"""
+    def project(self, feature: np.ndarray, output_bits: int,
+                modality: str = "default") -> str:
+        """将特征向量 LSH 投影到 output_bits 位，返回十六进制字符串。
+
+        Args:
+            feature: 输入特征向量
+            output_bits: 输出比特数
+            modality: 模态标识（vis/sem/tem），不同模态使用独立种子
+                      防止相同维度的特征（如 vis 576d 和 sem 576d）
+                      共享投影矩阵导致指纹混叠
+        """
         input_dim = feature.shape[0]
-        key = (input_dim, output_bits)
+        key = (input_dim, output_bits, modality)
 
         if key not in self._matrices:
-            rng = np.random.RandomState(_VIF_LSH_SEED)
+            # 不同模态 → 不同种子 → 独立正交投影矩阵
+            seed = _VIF_LSH_SEED + sum(ord(c) for c in modality)
+            rng = np.random.RandomState(seed)
             self._matrices[key] = rng.randn(output_bits, input_dim).astype(np.float64)
 
         projection = self._matrices[key]
@@ -283,21 +377,54 @@ def fuse_features(
     config: VIFConfig,
 ) -> str:
     """
-    加权拼接三个特征向量，LSH 降维到固定长度。
+    [Legacy] 加权拼接三个特征向量，单一 LSH 降维到固定长度。
 
-    Returns:
-        固定长度十六进制字符串 (output_length / 4 字符)
+    已被 fuse_features_v2 取代，保留用于 fusion_legacy 模式和消融实验。
+    缺陷：1248d concat 后全局投影，时序特征仅占 7.6% 被空间特征淹没。
     """
-    # 加权
     weighted_phash = phash_feat * config.phash_weight
     weighted_semantic = semantic_feat * config.semantic_weight
     weighted_temporal = temporal_feat * config.temporal_weight
-
-    # 拼接
     fused = np.concatenate([weighted_phash, weighted_semantic, weighted_temporal])
-
-    # LSH 投影
     return _VIFLSHProjector.get_instance().project(fused, config.output_length)
+
+
+def fuse_features_v2(
+    phash_feat: np.ndarray,
+    semantic_feat: np.ndarray,
+    temporal_feat: np.ndarray,
+    config: VIFConfig,
+    temporal_tag: str = "f",
+) -> str:
+    """
+    解耦 LSH：三模态独立投影，拼接为 256-bit 指纹 + 1 字符时序来源标记。
+
+    输出格式：hash_vis(16hex) || hash_sem(16hex) || hash_tem(32hex) || temporal_tag(1char)
+    总计 65 hex chars
+
+    temporal_tag:
+        'm' = MV 压缩域运动矢量
+        'f' = Farneback 稠密光流
+    """
+    projector = _VIFLSHProjector.get_instance()
+    hash_vis = projector.project(phash_feat, 64, modality="vis")
+    hash_sem = projector.project(semantic_feat, 64, modality="sem")
+    hash_tem = projector.project(temporal_feat, 128, modality="tem")
+    return hash_vis + hash_sem + hash_tem + temporal_tag
+
+
+def split_vif_hex(vif_hex: str):
+    """
+    将 VIF v2 hex 字符串拆分为三个模态哈希 + 时序来源标记。
+
+    Returns:
+        (hash_vis, hash_sem, hash_tem, temporal_tag)
+        - 16hex=64bit, 16hex=64bit, 32hex=128bit, 1char ('m'/'f')
+    """
+    if not vif_hex or len(vif_hex) < 64:
+        return None, None, None, None
+    tag = vif_hex[64] if len(vif_hex) > 64 else 'f'  # 向后兼容旧格式
+    return vif_hex[:16], vif_hex[16:32], vif_hex[32:64], tag
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────
@@ -305,17 +432,24 @@ def fuse_features(
 def compute_vif(
     gop_frames: List[np.ndarray],
     config: Optional[VIFConfig] = None,
+    motion_vectors: Optional[list] = None,
+    frame_width: int = 0,
+    frame_height: int = 0,
+    fps: float = 30.0,
 ) -> Optional[str]:
     """
     计算多模态融合视频完整性指纹 (VIF)。
 
     Args:
         gop_frames: GOP 内多帧列表 (BGR numpy 数组)。
-                    至少需要 1 帧用于 phash/semantic，>= 2 帧用于时序特征。
-        config: VIF 配置，默认从环境变量自动读取
+        config: VIF 配置
+        motion_vectors: 压缩域运动矢量列表（有则用 MV，无则回退 Farneback）
+        frame_width: 视频帧宽度（MV 归一化用）
+        frame_height: 视频帧高度
+        fps: 视频帧率
 
     Returns:
-        固定长度十六进制字符串（如 64 字符 = 256 位），
+        固定长度十六进制字符串（64 字符 = 256 位），
         当 mode="off" 时返回 None
     """
     if config is None:
@@ -339,6 +473,24 @@ def compute_vif(
         return _VIFLSHProjector.get_instance().project(feat, config.output_length)
 
     if config.mode == "fusion":
+        phash_feat = extract_phash_feature(keyframe)
+        semantic_feat = extract_semantic_feature(keyframe)
+
+        # 时序哈希始终用 Farneback（跨编码器一致性）
+        # MV 仅作为存在性标记（'m'=有MV / 'f'=无MV），
+        # 用于 TriStateVerifierV2 的 MV loss 惩罚检测 P/B 篡改
+        temporal_feat = extract_temporal_feature(gop_frames)
+
+        # MV 标记：有 MV 数据 → 'm'，无 → 'f'
+        if motion_vectors and len(motion_vectors) > 0 and frame_width > 0:
+            temporal_tag = 'm'
+        else:
+            temporal_tag = 'f'
+
+        return fuse_features_v2(phash_feat, semantic_feat, temporal_feat, config,
+                                temporal_tag=temporal_tag)
+
+    if config.mode == "fusion_legacy":
         phash_feat = extract_phash_feature(keyframe)
         semantic_feat = extract_semantic_feature(keyframe)
         temporal_feat = extract_temporal_feature(gop_frames)
