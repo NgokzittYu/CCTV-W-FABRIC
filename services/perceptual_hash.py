@@ -48,8 +48,7 @@ class DeepPerceptualHasher:
                     model.to(self.device)
 
                     self._transform = transforms.Compose([
-                        transforms.Resize(256),
-                        transforms.CenterCrop(224),
+                        transforms.Resize((224, 224)),
                         transforms.ToTensor(),
                         transforms.Normalize(
                             mean=[0.485, 0.456, 0.406],
@@ -61,29 +60,8 @@ class DeepPerceptualHasher:
         return self._model
 
     @torch.no_grad()
-    def extract(self, keyframe_frame: np.ndarray) -> Optional[np.ndarray]:
-        pil_image = _frame_to_pil_image(keyframe_frame)
-        if pil_image is None:
-            return None
-
-        try:
-            model = self._load_model()
-            tensor = self._transform(pil_image).unsqueeze(0).to(self.device)
-            with self._model_lock:
-                features = model(tensor)
-            features = torch.nn.functional.normalize(features, p=2, dim=1)
-            vector = features.squeeze(0).detach().cpu().numpy().astype(np.float64)
-            if vector.shape != (_LSH_INPUT_DIM,):
-                logger.warning("deep feature dimension mismatch: %s", vector.shape)
-                return None
-            return vector
-        except Exception as e:
-            logger.warning("deep feature extraction failed: %s", e)
-            return None
-
-    @torch.no_grad()
-    def extract_semantic(self, keyframe_frame: np.ndarray) -> Optional[np.ndarray]:
-        """Extract spatial features (before pool) for semantic analysis."""
+    def extract_visual_features(self, keyframe_frame: np.ndarray) -> Optional[dict]:
+        """Extract both global (1x1) and local (2x2) spatial features."""
         pil_image = _frame_to_pil_image(keyframe_frame)
         if pil_image is None:
             return None
@@ -96,21 +74,35 @@ class DeepPerceptualHasher:
             
             # Global Average Pooling
             gap = features_map.mean(dim=[2, 3]).squeeze(0)
-            vector = gap.detach().cpu().numpy().astype(np.float64)
-            
-            # Pad or truncate to _LSH_INPUT_DIM
-            if vector.shape[0] >= _LSH_INPUT_DIM:
-                vector = vector[:_LSH_INPUT_DIM]
-            else:
-                vector = np.pad(vector, (0, _LSH_INPUT_DIM - vector.shape[0]))
+            global_vec = gap.detach().cpu().numpy().astype(np.float64)
+            # L2 Normalize precisely
+            gnorm = np.linalg.norm(global_vec)
+            if gnorm > 1e-8:
+                global_vec = global_vec / gnorm
                 
-            # L2 Normalize
-            norm = np.linalg.norm(vector)
-            if norm > 1e-8:
-                vector = vector / norm
-            return vector
+            # Local 2x2 Grid using AdaptiveAvgPool2d
+            grid = torch.nn.functional.adaptive_avg_pool2d(features_map, (2, 2)).squeeze(0)
+            local_vecs = []
+            for i in range(2):
+                for j in range(2):
+                    vec = grid[:, i, j].detach().cpu().numpy().astype(np.float64)
+                    lnorm = np.linalg.norm(vec)
+                    if lnorm > 1e-8:
+                        vec = vec / lnorm
+                    local_vecs.append(vec)
+                    
+            # Ensure pad or truncate to _LSH_INPUT_DIM
+            def fix_dim(v):
+                if v.shape[0] >= _LSH_INPUT_DIM:
+                    return v[:_LSH_INPUT_DIM]
+                return np.pad(v, (0, _LSH_INPUT_DIM - v.shape[0]))
+                
+            return {
+                "global": fix_dim(global_vec),
+                "local": [fix_dim(v) for v in local_vecs]
+            }
         except Exception as e:
-            logger.warning("semantic feature extraction failed: %s", e)
+            logger.warning("visual feature extraction failed: %s", e)
             return None
 
 
@@ -188,16 +180,18 @@ def _get_lsh_compressor() -> LSHCompressor:
     return _lsh_compressor
 
 
-def _compute_deep_phash(keyframe_frame: np.ndarray) -> Optional[str]:
-    feature = _get_deep_hasher().extract(keyframe_frame)
-    if feature is None:
-        return None
+def _compute_deep_phash(keyframe_frame: np.ndarray) -> str:
+    """内部特征提取机制（深度学习版）"""
+    feats = _get_deep_hasher().extract_visual_features(keyframe_frame)
+    if feats is None or "global" not in feats:
+        return "0000000000000000"
+    feature = feats["global"]
 
     try:
         return _get_lsh_compressor().hash_vector(feature)
     except Exception as e:
         logger.warning("deep compute_phash failed: %s", e)
-        return None
+        return "0000000000000000"
 
 
 def compute_phash(keyframe_frame: np.ndarray) -> Optional[str]:

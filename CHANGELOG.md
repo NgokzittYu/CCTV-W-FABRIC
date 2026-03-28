@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-03-28 (Phase 3 VIF 边界消融实验与架构降级收拢)
+
+### Changed
+
+- **VIF 主线架构降级重组** (`services/vif.py`, `services/tri_state_verifier.py`)
+  - 彻底撤销并抛弃 384-bit (96-Hex) 的局部/全局混编协议提案，主系统 VIF 永久回退并收敛为最坚硬纯粹的 **256-bit (64-Hex) 双模态架构** (128-bit 视觉加上 128-bit 时序光流)。
+  - `TriStateVerifier` 同步剔除对于微弱局部分量 ($D_{local}$) 的探测和加权逻辑，回归最稳定的容错宏观判决 ($Risk = W_{vis} \cdot D_{vis} + W_{tem} \cdot D_{tem}$)。
+
+- **学术主张正式定调**
+  - 根据控制变量的消融数据结果，将 VIF 系统的纸面论文主张彻底降级定调：**将其明确降级为“对重压缩容忍度极高的前置宽容护城河”**，停止一切试图在 VIF 内进行像素级微小抽帧检测的“越级”开发。
+
+### Added
+
+- **网格哈希负面消融隔离区** (`services/perceptual_hash.py`, `benchmarks/tune_weights.py`)
+  - 保留了在底层特征网上拉取 $2 \times 2$ 宫格局部特征池的抽取接口，但不参与上层 VIF Hash 拼接。
+  - 在参数调测脚本 `tune_weights.py` 中独立实现了纯分离式的三态局部分支对照组 (Baseline vs Max_Local vs Top2_Mean)。
+  - 作为学术负面试验副产物，成功保留了“静态同源视频下，简单网格特征无法冲破抗转码阈值底噪”的量化证据，用作论证后续接入复杂语义网关系统的正当性。
+
 ## 2026-03-28 (Phase 2 VIF 架构精简与统一)
 
 ### Added
