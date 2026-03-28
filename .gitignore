@@ -3,6 +3,11 @@ __pycache__/
 *.pyo
 *.pyd
 
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # YOLO models (very large, do not upload)
 *.pt
 
@@ -13,6 +18,13 @@ evidences/
 venv/
 env/
 .env
+
+# Benchmark generated datasets and results (large mp4s and jsons)
+benchmarks/datasets/
+benchmarks/dataset_gen/
+benchmarks/results/
+benchmarks/manifest.json
+benchmarks/sample_videos/
 
 # Go module configs if they get too large
 # but usually go.sum and go.mod are fine

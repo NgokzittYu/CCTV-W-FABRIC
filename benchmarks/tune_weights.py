@@ -45,11 +45,9 @@ def main():
 
     total = len(parsed_samples)
 
-    # ── 对照消融实验 (Ablation Study) ──
-    # 用于证明分类器架构本身的鲁棒性，非暴力调参结果
-    prior_w_vis = 0.60
-    prior_w_tem = 0.40
-    prior_thresh = 0.25
+    prior_w_vis = 0.50
+    prior_w_tem = 0.50
+    prior_thresh = 0.35
     
     def eval_ablation(mode, alpha, w_vis, w_tem, thresh):
         res = {"correct": 0, "fp": 0, "fn": 0, "tp": 0, "tn_re": 0, "matrix": {}}
@@ -130,10 +128,10 @@ def main():
         print(f"  RE_ENCODED Retention Rate: {res['tn_re']}/{re_total} ({(res['tn_re']/max(1, re_total))*100:.1f}%)")
         print(f"  RE_ENCODED False Positive R: {res['fp']}/{re_total} ({(res['fp']/max(1, re_total))*100:.1f}%)")
 
-    print(f"\n=== ABLATION STUDY (Fixed W_vis=0.6, W_tem=0.4, Thresh=0.25) ===")
-    print_ablation("[Baseline] 原版全局视觉基线", "baseline", 1.0)
-    print_ablation("[Variant 1] 全局 + 2x2 局部 (Max 聚合)", "max", 0.5)
-    print_ablation("[Variant 2] 全局 + 2x2 局部 (Top2_Mean 聚合)", "top2", 0.5)
+    print(f"\n=== ABLATION STUDY (Tolerant Mode w_vis=0.5, w_tem=0.5, thresh=0.35) ===")
+    print_ablation("[Baseline] 宽容态全局视觉基线 (Tolerant Mode)", "baseline", 1.0)
+    print_ablation("[Legacy Variant] 局部 (Max) 废弃分支", "max", 0.5)
+    print_ablation("[Legacy Variant] 局部 (Top2_Mean) 废弃分支", "top2", 0.5)
 
     # ── 双轨评测: 调优上界 ──
     best_configs = [] # List of (accuracy, w_vis, w_tem, thresh)
