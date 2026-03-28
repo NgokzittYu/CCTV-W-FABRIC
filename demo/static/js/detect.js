@@ -166,7 +166,7 @@ function renderDetectResults(data) {
     comp.innerHTML = data.comparisons.map(c => {
         const stateCls = c.state === 'INTACT' ? 'state-intact' : c.state === 'TAMPERED' ? 'state-tampered' : 'state-reencoded';
         const borderCls = c.state === 'TAMPERED' ? 'border-red-400' : c.state === 'RE_ENCODED' ? 'border-yellow-400' : 'border-green-200';
-        const riskColor = c.risk_score >= 0.15 ? 'text-red-500' : c.risk_score >= 0.10 ? 'text-yellow-500' : 'text-green-600';
+        const riskColor = c.risk_score >= 0.18 ? 'text-red-500' : c.risk_score >= 0.10 ? 'text-yellow-500' : 'text-green-600';
         const hasDetails = c.d_vis !== undefined && c.d_vis !== null;
         return `
             <div class="flex items-center gap-4 p-3 rounded-xl border ${borderCls} bg-white">

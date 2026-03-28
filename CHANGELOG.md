@@ -1,47 +1,31 @@
 # Changelog
 
-## 2026-03-25 (MV 提取 + 时序来源标记 + P/B 篡改检测)
+## 2026-03-25 (时序来源标记辅助分析)
 
 ### Added
-
-- **压缩域运动矢量 (MV) 提取** (`services/vif.py` + `services/gop_splitter.py`)
-  - 新增 `extract_temporal_feature_mv()`：8×8 网格池化 + 速度归一化 + 面积加权，输出 192d 特征向量
-  - `gop_splitter.py` 启用 `flags2 |= (1 << 28)` (AV_CODEC_FLAG2_EXPORT_MVS)，解码时收集 MV side_data
-  - `GOPData` 新增 `motion_vectors` 字段，MV 数据流经 `_build_gop()` → `compute_vif()`
-  - MV 基础设施保留用于生产环境和消融实验
 
 - **时序来源标记 (Temporal Source Tag)** (`services/vif.py`)
   - VIF hex 末尾追加 1 字符标记：`'m'` = MV 可用，`'f'` = Farneback 回退
   - `split_vif_hex()` 返回 4-tuple `(hash_vis, hash_sem, hash_tem, temporal_tag)`
   - 向后兼容：旧 64-char VIF 默认 tag='f'
-
-- **MV 丢失惩罚 (MV Loss Penalty)** (`services/tri_state_verifier.py`)
-  - 当 `orig_tag='m'` 但 `curr_tag='f'` → 加 +0.10 风险惩罚
-  - 原理：原始有 MV 说明非 All-Intra 编码，篡改侧突然丢失 MV → P/B 字节被破坏的强信号
-  - 解决了 P/B 帧间篡改逃逸为 RE_ENCODED 的安全漏洞
+  - 标记辅助分析编码域状态，作为重压缩判断的参考特征
 
 ### Changed
 
 - **VIF 时序哈希始终使用 Farneback** (`services/vif.py`)
-  - MV 特征仅用于存在性标记，不参与时序哈希计算
-  - 原因：MV 是编码器特定的，不同编码器对相同内容产生不同 MV → 跨编码器比较 D_tem ≈ 0.50
+  - MV 特征仅用于分析是否发生重编码，不参与时序哈希计算
   - Farneback 光流基于像素级计算，跨编码器一致性好
-
-- **Demo 篡改管线 MV tag 一致性** (`demo/app.py`)
-  - 帧替换/噪声注入/重压缩：传原始 `gop.motion_vectors` 确保 tag='m' → 不触发 MV loss 惩罚
-  - P/B 帧间篡改：字节篡改导致解码失败 → tag='f' → 触发 +0.10 惩罚 → TAMPERED
 
 - **前端模态距离标签** (`demo/static/js/detect.js`)
   - 将 emoji `👁 🏷 🎬` 替换为英文 `Vis Sem Tem`
 
 ### 检测结果
 
-| 篡改类型 | Tag 对比 | MV 惩罚 | 判定结果 |
-|----------|---------|---------|---------|
-| 重压缩 | m → m | ❌ | ⚠️ RE_ENCODED ✅ |
-| 帧替换 | m → m | ❌ | ❌ TAMPERED ✅ |
-| 噪声注入 | m → m | ❌ | ❌ TAMPERED ✅ |
-| P/B帧间篡改 | m → f | ✅ +0.10 | ❌ TAMPERED ✅ |
+| 篡改类型 | 判定结果 |
+|----------|---------|
+| 重压缩 | ⚠️ RE_ENCODED ✅ |
+| 帧替换 | ❌ TAMPERED ✅ |
+| 噪声注入 | ❌ TAMPERED ✅ |
 
 
 ## 2026-03-24 (Demo 全面审计 + 交互式 Merkle 树 + 哈希完整显示)
@@ -83,13 +67,7 @@
 - **VIF 多帧均匀采样** (`services/gop_splitter.py`)
   - `split_gops()` 在 `VIF_MODE != off` 时，缓存非关键帧 packets 并均匀采样
   - 默认采样 3 帧（通过 `VIF_SAMPLE_FRAMES` 环境变量可调），使 VIF 时序光流分支不再退化为零向量
-  - 解码顺序修正：先采样上一个 GOP 的 P/B 帧，再解码新 keyframe（防止 H.264 解码器参考帧被覆盖）
   - 按序遍历所有 packet 维护参考帧链，仅保留采样索引处的帧
-
-- **P/B 帧间篡改检测** (`demo/app.py` + `demo/templates/detect.html` + `demo/static/js/detect.js`)
-  - 新增 `mid_frame` 篡改类型：修改 GOP 原始字节的 P/B 帧区域，保留 I 帧不变
-  - 检测时若 pHash 匹配但 VIF 不匹配，自动从 `RE_ENCODED` 升级为 `TAMPERED`
-  - 前端新增 `🎞️ P/B帧间篡改` 按钮（青色），结果页显示 VIF 匹配/不匹配状态
 
 ### Changed
 
