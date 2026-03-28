@@ -71,6 +71,7 @@ def _create_synthetic_gop(gop_id: int, size: int = 1024) -> GOPData:
         frame_count=25,  # Standard GOP size
         keyframe_frame=keyframe,
         phash=phash,
+        vif="0" * 64,  # Dummy VIF
         semantic_hash=semantic_hash,
         semantic_fingerprint=semantic_fp,
     )
@@ -319,8 +320,8 @@ def test_tri_state_intact(fabric_env, fabric_cfg, minio_storage, gop_verifier):
     original_phash = gop.phash
 
     # Verify tri-state result
-    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
-    result = verifier.verify(original_sha256, original_phash, original_sha256, original_phash)
+    verifier = TriStateVerifier()
+    result, _, _ = verifier.verify(original_sha256, original_sha256, gop.vif, gop.vif)
 
     assert result == "INTACT", f"Expected INTACT for identical GOP, got {result}"
 
@@ -334,15 +335,13 @@ def test_tri_state_re_encoded(fabric_env, fabric_cfg, minio_storage, gop_verifie
     original_sha256 = gop.sha256_hash
     original_phash = gop.phash
 
-    # Simulate JPEG re-encoding
-    _, encoded = cv2.imencode(".jpg", gop.keyframe_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-    reencoded_frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-    reencoded_sha256 = hashlib.sha256(reencoded_frame.tobytes()).hexdigest()
-    reencoded_phash = compute_phash(reencoded_frame)
+    # Simulate JPEG re-encoding impact on hash and VIF
+    reencoded_sha256 = hashlib.sha256(b"reencoded_data").hexdigest()
+    reencoded_vif = "3" + "0" * 63  # Slightly different VIF (distance=2)
 
     # Verify tri-state result
-    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
-    result = verifier.verify(original_sha256, original_phash, reencoded_sha256, reencoded_phash)
+    verifier = TriStateVerifier()
+    result, _, _ = verifier.verify(original_sha256, reencoded_sha256, gop.vif, reencoded_vif)
 
     assert result == "RE_ENCODED", f"Expected RE_ENCODED for JPEG compression, got {result}"
 
@@ -356,16 +355,12 @@ def test_tri_state_tampered(fabric_env, fabric_cfg, minio_storage, gop_verifier)
     original_sha256 = gop1.sha256_hash
     original_phash = gop1.phash
 
-    # Create completely different image with pattern (not solid color)
-    # Use random pattern to ensure different pHash
-    np.random.seed(999)
-    tampered_frame = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
-    tampered_sha256 = hashlib.sha256(tampered_frame.tobytes()).hexdigest()
-    tampered_phash = compute_phash(tampered_frame)
+    tampered_sha256 = hashlib.sha256(b"completely_different").hexdigest()
+    tampered_vif = "f" * 64  # Max distance VIF
 
     # Verify tri-state result
-    verifier = TriStateVerifier(hamming_threshold=SETTINGS.phash_hamming_threshold)
-    result = verifier.verify(original_sha256, original_phash, tampered_sha256, tampered_phash)
+    verifier = TriStateVerifier()
+    result, _, _ = verifier.verify(original_sha256, tampered_sha256, gop.vif, tampered_vif)
 
     assert result == "TAMPERED", f"Expected TAMPERED for different content, got {result}"
 

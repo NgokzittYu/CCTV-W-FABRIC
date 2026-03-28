@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from services.perceptual_hash import compute_phash, hamming_distance
 from services.merkle_utils import compute_leaf_hash, MerkleTree
-from services.tri_state_verifier import TriStateVerifier, TriStateVerifierV2
+from services.tri_state_verifier import TriStateVerifier
 from services.mab_anchor import MABAnchorManager, ARM_INTERVALS
 from services.gop_splitter import split_gops
 from benchmarks.datasets import apply_tamper
@@ -353,44 +353,22 @@ def _reencode_gop_tampered(
     raw_bytes = buf.getvalue()
     t_sha = hashlib.sha256(raw_bytes).hexdigest()
 
-    # ── 4. 重新打开以提取 MV ──
-    mvs = []
+    # ── 4. 重新打开以解码完整帧 ──
     decoded_frames = []
     try:
         container2 = _av.open(_io.BytesIO(raw_bytes))
         vs2 = container2.streams.video[0]
-        vs2.codec_context.flags2 |= (1 << 28)  # AV_CODEC_FLAG2_EXPORT_MVS
-        _tw = vs2.codec_context.width or w
-        _th = vs2.codec_context.height or h
         for pkt in container2.demux(vs2):
             if pkt.size == 0:
                 continue
             try:
                 for frm in vs2.codec_context.decode(pkt):
                     decoded_frames.append(frm.to_ndarray(format="bgr24"))
-                    try:
-                        sd = frm.side_data
-                        if sd:
-                            for item in sd:
-                                if 'MOTION' in str(item.type).upper():
-                                    arr = item.to_ndarray()
-                                    for row in arr:
-                                        mvs.append({
-                                            'src_x': int(row['src_x']),
-                                            'src_y': int(row['src_y']),
-                                            'motion_x': int(row['motion_x']),
-                                            'motion_y': int(row['motion_y']),
-                                            'motion_scale': int(row['motion_scale']),
-                                            'w': int(row['w']),
-                                            'h': int(row['h']),
-                                        })
-                    except Exception:
-                        pass
             except Exception:
                 pass
         container2.close()
     except Exception as e:
-        print(f"[REENCODE] MV 提取失败: {e}")
+        print(f"[REENCODE] 重新解码失败: {e}")
 
     # ── 5. 计算 VIF（带 MV 标记）──
     # 关键：帧采样必须与 _build_gop 一致（keyframe + VIF_SAMPLE_FRAMES 采样帧）
@@ -408,13 +386,7 @@ def _reencode_gop_tampered(
         else:
             vif_frames = all_frames
         try:
-            t_vif = compute_vif(
-                vif_frames, vif_config,
-                motion_vectors=mvs,
-                frame_width=_tw if mvs else 0,
-                frame_height=_th if mvs else 0,
-                fps=30.0,
-            )
+            t_vif = compute_vif(vif_frames, vif_config)
         except Exception:
             pass
 
@@ -480,14 +452,9 @@ def api_tamper():
                     if vif_config.mode != "off":
                         import io as _io
                         tampered_frames_list = [gop.keyframe_frame]  # I帧不变
-                        tampered_mvs = []
                         try:
                             container = _av.open(_io.BytesIO(bytes(raw)))
                             vs = container.streams.video[0]
-                            vs.codec_context.flags2 |= (1 << 28)
-                            _tw = vs.codec_context.width or 1920
-                            _th = vs.codec_context.height or 1080
-                            _tfps = float(vs.average_rate) if vs.average_rate else 30.0
                             decoded_count = 0
                             for pkt in container.demux(vs):
                                 if pkt.size == 0:
@@ -497,25 +464,6 @@ def api_tamper():
                                         decoded_count += 1
                                         if decoded_count > 1 and decoded_count % 5 == 0:
                                             tampered_frames_list.append(frm.to_ndarray(format="bgr24"))
-                                        # 收集 MV
-                                        try:
-                                            sd = frm.side_data
-                                            if sd:
-                                                for sd_item in sd:
-                                                    if hasattr(sd_item, 'type') and 'MOTION' in str(sd_item.type):
-                                                        mv_arr = sd_item.to_ndarray()
-                                                        for mv_row in mv_arr:
-                                                            tampered_mvs.append({
-                                                                'src_x': int(mv_row['src_x']),
-                                                                'src_y': int(mv_row['src_y']),
-                                                                'motion_x': int(mv_row['motion_x']),
-                                                                'motion_y': int(mv_row['motion_y']),
-                                                                'motion_scale': int(mv_row['motion_scale']),
-                                                                'w': int(mv_row['w']),
-                                                                'h': int(mv_row['h']),
-                                                            })
-                                        except Exception:
-                                            pass
                                 except Exception:
                                     pass
                             container.close()
@@ -523,10 +471,6 @@ def api_tamper():
                             pass
                         tampered_vif = compute_vif(
                             tampered_frames_list, vif_config,
-                            motion_vectors=tampered_mvs,
-                            frame_width=_tw if tampered_mvs else 0,
-                            frame_height=_th if tampered_mvs else 0,
-                            fps=_tfps if tampered_mvs else 30.0,
                         )
                 except Exception:
                     pass
@@ -582,14 +526,8 @@ def api_tamper():
                 t_phash = compute_phash(t_frame)
                 t_vif = None
                 if vif_config.mode != "off":
-                    try:
-                        # 传原始 MV 确保 tag 一致（tag='m' → tag='m'）
-                        # 避免 MV loss 假阳惩罚
                         t_vif = compute_vif(
                             [t_frame], vif_config,
-                            motion_vectors=gop.motion_vectors or [],
-                            frame_width=kf.shape[1] if gop.motion_vectors else 0,
-                            frame_height=kf.shape[0] if gop.motion_vectors else 0,
                         )
                     except Exception:
                         pass
@@ -650,7 +588,7 @@ def api_detect():
             # ─── 统一的 GOP 级别对比（VIF v2 加权评分） ───
             orig_list = store["orig_gop_info"]
             tampered_list = store["tampered_gop_info"]
-            verifier = TriStateVerifierV2()
+            verifier = TriStateVerifier()
             comparisons = []
 
             for i in range(min(len(orig_list), len(tampered_list))):
@@ -721,7 +659,7 @@ def api_detect():
             suspect_frames = orig_frames
 
         # 使用 VIF v2 对 GOP 级别对比
-        verifier = TriStateVerifierV2()
+        verifier = TriStateVerifier()
         comparisons = []
 
         for i in range(min(len(orig_gops), len(suspect_gops) if suspect_path else len(orig_gops))):

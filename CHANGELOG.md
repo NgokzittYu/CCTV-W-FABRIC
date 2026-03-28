@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-28 (Phase 2 VIF 架构精简与统一)
+
+### Added
+
+- **TriStateVerifier 统一** (`services/tri_state_verifier.py`)
+  - 彻底合并 `TriStateVerifierV2` 为唯一的 `TriStateVerifier`。
+  - 验证接口变更为更统一的 `verify(orig_sha256, curr_sha256, orig_vif, curr_vif)`，输出 `(state, risk, dict)`。
+  - 测试用例库全量更新以匹配解耦后的 256 位 VIF API，抛弃传统 pHash Hamming Threshold 断言机制。
+
+### Changed
+
+- **模型计算资源复用优化** (`services/vif.py` & `services/perceptual_hash.py`)
+  - VIF （多模态完整性指纹）和 pHash 指纹现在统一调用 `DeepPerceptualHasher` 的单例。
+  - 废弃了原有的 `_SemanticFeatureExtractor` 内置实例化逻辑网络，大幅降低了在融合模式下所需的显存与内存开销。
+- **TriStateVerifier 风险决策变更** (`services/tri_state_verifier.py`)
+  - 彻底移除了“语义一票否决” (`semantic_veto`) 以及“运动矢量衰减” (`mv_loss_penalty`) 的实验性启发式机制。
+  - 转而采用纯数学形式的纯线性加权：`Risk = W_vis·D_vis + W_sem·D_sem + W_tem·D_tem`。
+
+### Removed
+
+- **废弃离线持久化** (`services/perceptual_hash.py`)
+  - 删除了 LSH 投影矩阵的 `.npy` 磁盘持久化保存恢复机制 (`save()`/`load()`)。
+  - 变更为由确定性种子生成的运行时构建，确立无状态系统兼容性。
+- **废弃经典非深度网络功能支持** (`services/perceptual_hash.py`)
+  - 全面删除了对基于 `imagehash` 库（如离散余弦变换）等非深度学习哈希方法的回退支持。现在系统仅依赖基于轻量 MobileNet 特征空间。
+- **彻底删除压缩域运动矢量耦合** (`services/gop_splitter.py`, `demo/app.py`, `services/vif.py`)
+  - 删除了 PyAV 对 H.264 宏块的 `AV_CODEC_FLAG2_EXPORT_MVS` 抽取参数及附随的 `GOPData.motion_vectors` 定义，显著降低 GOP 划分阶段的解码负担与长序列解析响应时间。
+  - 移除了由于携带状态标识而向 VIF 标准 64 字符（256位）附加第 65 位标志位（`'m'` / `'f'`）的行为，恢复全长统一标准。
 ## 2026-03-25 (时序来源标记辅助分析)
 
 ### Added

@@ -45,7 +45,6 @@ class GOPData:
     semantic_hash: Optional[str] = None  # semantic fingerprint hash
     semantic_fingerprint: Optional[SemanticFingerprint] = None  # full semantic data
     vif: Optional[str] = None        # multi-modal fusion fingerprint (VIF)
-    motion_vectors: Optional[list] = None  # 压缩域运动矢量 (MV)
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +100,6 @@ def _build_gop(
     frame_count: int,
     keyframe_frame: np.ndarray,
     extra_frames: Optional[List[np.ndarray]] = None,
-    motion_vectors: Optional[list] = None,
-    frame_width: int = 0,
-    frame_height: int = 0,
-    fps: float = 30.0,
 ) -> GOPData:
     raw = bytes(buf)
     sha256_hash = hashlib.sha256(raw).hexdigest()
@@ -135,11 +130,7 @@ def _build_gop(
             if extra_frames:
                 gop_frames.extend(extra_frames)
             vif_str = compute_vif(
-                gop_frames, vif_config,
-                motion_vectors=motion_vectors,
-                frame_width=frame_width,
-                frame_height=frame_height,
-                fps=fps,
+                gop_frames, vif_config
             )
     except Exception as e:
         print(f"[GOP_SPLITTER] 警告：VIF 计算失败 GOP {gop_id}: {e}")
@@ -155,9 +146,7 @@ def _build_gop(
         keyframe_frame=keyframe_frame,
         phash=phash,
         semantic_hash=semantic_hash,
-        semantic_fingerprint=semantic_fp,
         vif=vif_str,
-        motion_vectors=motion_vectors,
     )
 
 
@@ -179,17 +168,6 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     video_stream = container.streams.video[0]
     intra_only = _is_intra_only(video_stream)
 
-    # 启用运动矢量导出
-    # 启用运动矢量导出 (AV_CODEC_FLAG2_EXPORT_MVS = 1 << 28)
-    # 注意: codec_context.options 在 av.open() 自动打开 codec 后无效
-    # 必须通过 flags2 直接设置
-    video_stream.codec_context.flags2 |= (1 << 28)
-
-    # 获取视频元数据（MV 归一化用）
-    _fw = video_stream.codec_context.width or 1920
-    _fh = video_stream.codec_context.height or 1080
-    _fps = float(video_stream.average_rate) if video_stream.average_rate else 30.0
-
     if intra_only:
         print(f"[GOP_SPLITTER] Intra-only codec ({video_stream.codec_context.name}), "
               f"grouping every {mjpeg_gop_size} frames as one logical GOP")
@@ -210,15 +188,14 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     # 缓存当前 GOP 的非关键帧 packets，用于解码采样
     gop_packets: List[av.Packet] = []
 
-    def _sample_extra_frames(packets: List[av.Packet], stream) -> tuple:
-        """从缓存的 packets 中按顺序解码并均匀采样，返回 (BGR 帧列表, MV 列表)。
+    def _sample_extra_frames(packets: List[av.Packet], stream) -> List[np.ndarray]:
+        """从缓存的 packets 中按顺序解码并均匀采样，返回 BGR 帧列表。
 
         必须在下一个 keyframe 解码之前调用，以保持 H.264 解码器参考帧状态。
         所有 packet 按顺序送入解码器（维护参考帧链），但只保留采样索引处的帧。
-        同时收集所有帧的运动矢量 (MV) side_data。
         """
         if not packets or not need_extra:
-            return [], []
+            return []
         # 确定采样索引
         total = len(packets)
         if total <= vif_sample_n:
@@ -228,7 +205,6 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
             sample_set = {int(i * step) for i in range(vif_sample_n)}
 
         sampled: List[np.ndarray] = []
-        collected_mvs: list = []
         max_needed = max(sample_set) + 1  # 只需解码到最后一个采样点
         # 抑制 H.264 解码 P/B 帧时的警告
         prev_level = av.logging.get_level()
@@ -242,29 +218,10 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
                     frame = decoded[0]
                     if idx in sample_set:
                         sampled.append(frame.to_ndarray(format="bgr24"))
-                    # 收集所有帧的 MV（不仅采样帧）
-                    try:
-                        sd = frame.side_data
-                        if sd:
-                            for sd_item in sd:
-                                if hasattr(sd_item, 'type') and 'MOTION' in str(sd_item.type):
-                                    mv_array = sd_item.to_ndarray()
-                                    for mv_row in mv_array:
-                                        collected_mvs.append({
-                                            'src_x': int(mv_row['src_x']),
-                                            'src_y': int(mv_row['src_y']),
-                                            'motion_x': int(mv_row['motion_x']),
-                                            'motion_y': int(mv_row['motion_y']),
-                                            'motion_scale': int(mv_row['motion_scale']),
-                                            'w': int(mv_row['w']),
-                                            'h': int(mv_row['h']),
-                                        })
-                    except Exception:
-                        pass
             except Exception:
                 pass
         av.logging.set_level(prev_level)
-        return sampled, collected_mvs
+        return sampled
 
     for packet in container.demux(video_stream):
         if packet.size == 0:
@@ -295,11 +252,10 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
                 if buf and pending_keyframe is not None:
                     # ★ 关键：在解码新 keyframe 之前先采样上一个 GOP 的 P/B 帧
                     # 此时解码器的参考帧仍是上一个 GOP 的 I 帧
-                    extra, mvs = _sample_extra_frames(gop_packets, video_stream)
+                    extra = _sample_extra_frames(gop_packets, video_stream)
                     gops.append(_build_gop(
                         gop_id, buf, start_ts, end_ts, frame_count,
-                        pending_keyframe, extra_frames=extra,
-                        motion_vectors=mvs, frame_width=_fw, frame_height=_fh, fps=_fps,
+                        pending_keyframe, extra_frames=extra
                     ))
                     gop_id += 1
 
@@ -320,11 +276,10 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
 
     # Finalize the last GOP
     if buf and pending_keyframe is not None:
-        extra, mvs = _sample_extra_frames(gop_packets, video_stream)
+        extra = _sample_extra_frames(gop_packets, video_stream)
         gops.append(_build_gop(
             gop_id, buf, start_ts, end_ts, frame_count,
-            pending_keyframe, extra_frames=extra,
-            motion_vectors=mvs, frame_width=_fw, frame_height=_fh, fps=_fps,
+            pending_keyframe, extra_frames=extra
         ))
 
     container.close()

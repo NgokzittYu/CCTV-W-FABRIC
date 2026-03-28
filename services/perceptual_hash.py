@@ -12,7 +12,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-import imagehash
 import numpy as np
 import torch
 from PIL import Image
@@ -82,6 +81,38 @@ class DeepPerceptualHasher:
             logger.warning("deep feature extraction failed: %s", e)
             return None
 
+    @torch.no_grad()
+    def extract_semantic(self, keyframe_frame: np.ndarray) -> Optional[np.ndarray]:
+        """Extract spatial features (before pool) for semantic analysis."""
+        pil_image = _frame_to_pil_image(keyframe_frame)
+        if pil_image is None:
+            return None
+
+        try:
+            model = self._load_model()
+            tensor = self._transform(pil_image).unsqueeze(0).to(self.device)
+            with self._model_lock:
+                features_map = model.features(tensor)
+            
+            # Global Average Pooling
+            gap = features_map.mean(dim=[2, 3]).squeeze(0)
+            vector = gap.detach().cpu().numpy().astype(np.float64)
+            
+            # Pad or truncate to _LSH_INPUT_DIM
+            if vector.shape[0] >= _LSH_INPUT_DIM:
+                vector = vector[:_LSH_INPUT_DIM]
+            else:
+                vector = np.pad(vector, (0, _LSH_INPUT_DIM - vector.shape[0]))
+                
+            # L2 Normalize
+            norm = np.linalg.norm(vector)
+            if norm > 1e-8:
+                vector = vector / norm
+            return vector
+        except Exception as e:
+            logger.warning("semantic feature extraction failed: %s", e)
+            return None
+
 
 class LSHCompressor:
     def __init__(
@@ -118,35 +149,6 @@ class LSHCompressor:
         for bit in bits:
             value = (value << 1) | int(bit)
         return f"{value:016x}"
-
-    def save_projection(self, filepath: str):
-        np.save(filepath, self.projection_matrix)
-
-    @classmethod
-    def load_projection(
-        cls,
-        filepath: str,
-        input_dim: int = _LSH_INPUT_DIM,
-        hash_bits: int = _LSH_HASH_BITS,
-        seed: int = _LSH_SEED,
-    ) -> "LSHCompressor":
-        path = Path(filepath)
-        if not path.exists():
-            return cls(input_dim=input_dim, hash_bits=hash_bits, seed=seed)
-
-        try:
-            matrix = np.load(path, allow_pickle=False)
-            return cls(
-                input_dim=input_dim,
-                hash_bits=hash_bits,
-                seed=seed,
-                projection_matrix=matrix,
-            )
-        except Exception as e:
-            logger.warning("failed to load projection matrix from %s: %s", filepath, e)
-            return cls(input_dim=input_dim, hash_bits=hash_bits, seed=seed)
-
-
 def _frame_to_pil_image(keyframe_frame: np.ndarray) -> Optional[Image.Image]:
     if keyframe_frame is None:
         logger.warning("compute_phash: keyframe_frame is None")
@@ -166,18 +168,6 @@ def _frame_to_pil_image(keyframe_frame: np.ndarray) -> Optional[Image.Image]:
 
     rgb_array = keyframe_frame[:, :, ::-1]
     return Image.fromarray(rgb_array, mode="RGB")
-
-
-def _compute_legacy_phash(keyframe_frame: np.ndarray) -> Optional[str]:
-    pil_image = _frame_to_pil_image(keyframe_frame)
-    if pil_image is None:
-        return None
-
-    try:
-        return str(imagehash.phash(pil_image, hash_size=8))
-    except Exception as e:
-        logger.warning("legacy compute_phash failed: %s", e)
-        return None
 
 
 def _get_deep_hasher() -> DeepPerceptualHasher:
@@ -220,12 +210,7 @@ def compute_phash(keyframe_frame: np.ndarray) -> Optional[str]:
     Returns:
         64-bit pHash as hexadecimal string, or None if computation fails
     """
-    mode = os.getenv("PHASH_MODE", "legacy").strip().lower()
-    if mode == "deep":
-        return _compute_deep_phash(keyframe_frame)
-    if mode != "legacy":
-        logger.warning("unknown PHASH_MODE=%s, falling back to legacy", mode)
-    return _compute_legacy_phash(keyframe_frame)
+    return _compute_deep_phash(keyframe_frame)
 
 
 def _parse_hash_value(hash_value: str) -> int:
