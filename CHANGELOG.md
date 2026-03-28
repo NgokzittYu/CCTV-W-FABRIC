@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-28 (Phase 4 VIF 模块重构与协议收敛)
+
+### Changed
+
+- **VIF 模型纯粹化与降负** (`services/vif.py`)
+  - 彻底剔除基于 Farneback 光流的时序特征提取逻辑 (`extract_temporal_feature`)，解除算力黑洞。
+  - 将 VIF 收敛为“纯视觉的内容级宽容匹配初筛器”。采用 GOP 关键帧与绝对确定性采样帧（默认再抽 1 帧）提取视觉 CNN Embedding 后进行平均池化（Mean Pooling），保证其在计算负担大幅下降的同时，坚守“对整个 GOP 片段背书，而非退化为单帧封面”的系统级初衷。
+  - **冻结协议位宽**：在去除多模态拼接的同时，LSH 投影层直接将 Mean Pooling 后的视觉底噪映射拼接为 **256-bit (64 字符十六进制)**，绝不越界修改上游 Merkle 树及数据库已保留的特征定型标准。
+
+- **三态验证容忍逻辑校准** (`services/tri_state_verifier.py`)
+  - 彻底抹除多模态分数权重耦合。
+  - 简化判定链路为：**SHA 完全一致 → INTACT**；**SHA 破坏 + VIF < 0.35 阈值 → RE_ENCODED**。
+  - **防腐与定性降格**：当阈值被击穿时，API 主状态兼容旧有返回 `TAMPERED`，但在 `state_desc` 与底层逻辑日志中，明确定位该行为为 **`TAMPERED_SUSPECT`**（高危疑似建议），在代码层面坚守其非终判职权。
+
+- **GOP 采样的绝对确定性** (`services/gop_splitter.py`)
+  - 彻底重构多帧提取策略：将 `_sample_extra_frames` 基于浮点步长的均匀抽离，改为坚固的整数绝对索引提取（如单帧抽样绝对锁定在 `total // 2` 的帧位），彻底抹平跨平台与不同机器解码帧流落差引发的 Hash 漂移。
+
+- **配置版本演进与连带测试** (`config.py`, `demo/app.py`, `tests/*`)
+  - `config.py` 加入常驻版本钉死：`VIF_VERSION = "v4"` 与 `VIF_SAMPLE_FRAMES = 1`，防范未来产生旧有配置漂移和实验数据交叉污染。
+  - `demo/app.py`、`tests/test_vif.py` 与重转码实验的 Benchmarks 同步切断旧时序与语义逻辑依赖，V4 相关核心链路的单元测试满分通过。
+
 ### v1.4.1 (2026-03-28)
 - **VIF 模型边界定锤 (Phase 3 负面校准)**:
   - 弃用固定的拍脑袋 VIF 三态判决阈值 (0.25)，使用数据驱动 (P99 真实高动态视频特征漂移包络 0.3203，加上 margin) 建立起 `0.35` 的宽容前置过滤主线 (`Tolerant Mode`)。

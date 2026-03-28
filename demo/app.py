@@ -376,12 +376,14 @@ def _reencode_gop_tampered(
     t_vif = None
     if vif_config.mode != "off":
         all_frames = decoded_frames if decoded_frames else tampered_frames
-        vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "3"))
+        vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "1"))
         if len(all_frames) > 1 + vif_sample_n:
-            # 均匀采样，与 _sample_extra_frames 逻辑一致
             total_extra = len(all_frames) - 1
-            step = total_extra / vif_sample_n
-            sampled_indices = [int(i * step) + 1 for i in range(vif_sample_n)]
+            if vif_sample_n == 1:
+                sampled_indices = [1 + total_extra // 2]
+            else:
+                step = total_extra / vif_sample_n
+                sampled_indices = [1 + int(i * step + step / 2) for i in range(vif_sample_n)]
             vif_frames = [all_frames[0]] + [all_frames[idx] for idx in sampled_indices]
         else:
             vif_frames = all_frames
@@ -603,10 +605,9 @@ def api_detect():
                 comparisons.append({
                     "frame_index": i,
                     "state": state,
+                    "state_desc": details.get("state_desc", state),
                     "risk_score": round(risk, 4),
                     "d_vis": details.get("d_vis"),
-                    "d_sem": details.get("d_sem"),
-                    "d_tem": details.get("d_tem"),
                     "sha_match": o["sha256"] == t["sha256"],
                     "orig_thumb": _frame_to_base64_bgr(o["keyframe"], max_width=160),
                     "suspect_thumb": _frame_to_base64_bgr(t["keyframe"], max_width=160),
@@ -674,10 +675,9 @@ def api_detect():
             comparisons.append({
                 "frame_index": i,
                 "state": state,
+                "state_desc": details.get("state_desc", state),
                 "risk_score": round(risk, 4),
                 "d_vis": details.get("d_vis"),
-                "d_sem": details.get("d_sem"),
-                "d_tem": details.get("d_tem"),
                 "sha_match": og.sha256_hash == sg.sha256_hash,
                 "orig_thumb": _frame_to_base64_bgr(og.keyframe_frame, max_width=160),
                 "suspect_thumb": _frame_to_base64_bgr(sg.keyframe_frame, max_width=160),

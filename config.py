@@ -139,6 +139,8 @@ class Settings:
     # Semantic fingerprint configuration
     semantic_model_path: str
     semantic_confidence: float
+    vif_version: str
+    vif_sample_frames: int
 
 
 def load_settings() -> Settings:
@@ -196,6 +198,8 @@ def load_settings() -> Settings:
         phash_hamming_threshold=_env_int("PHASH_HAMMING_THRESHOLD", 10),
         semantic_model_path=_env_str("SEMANTIC_MODEL_PATH", "yolov8n.pt"),
         semantic_confidence=_env_float("SEMANTIC_CONFIDENCE", 0.5),
+        vif_version=_env_str("VIF_VERSION", "v4"),
+        vif_sample_frames=_env_int("VIF_SAMPLE_FRAMES", 1),
     )
 
 

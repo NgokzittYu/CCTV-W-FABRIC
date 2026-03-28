@@ -174,7 +174,7 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
 
     # VIF 多帧采样设置
     vif_mode = os.environ.get("VIF_MODE", "off").strip().lower()
-    vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "3"))
+    vif_sample_n = int(os.environ.get("VIF_SAMPLE_FRAMES", "1"))
     need_extra = (vif_mode != "off" and vif_sample_n > 0)
 
     gops: List[GOPData] = []
@@ -189,8 +189,8 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     gop_packets: List[av.Packet] = []
 
     def _sample_extra_frames(packets: List[av.Packet], stream) -> List[np.ndarray]:
-        """从缓存的 packets 中按顺序解码并均匀采样，返回 BGR 帧列表。
-
+        """从缓存的 packets 中按顺序解码并确定性采样，返回 BGR 帧列表。
+        
         必须在下一个 keyframe 解码之前调用，以保持 H.264 解码器参考帧状态。
         所有 packet 按顺序送入解码器（维护参考帧链），但只保留采样索引处的帧。
         """
@@ -198,11 +198,16 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
             return []
         # 确定采样索引
         total = len(packets)
+        sample_set = set()
         if total <= vif_sample_n:
             sample_set = set(range(total))
+        elif vif_sample_n == 1:
+            # 单帧定中
+            sample_set = {total // 2}
         else:
+            # 均分
             step = total / vif_sample_n
-            sample_set = {int(i * step) for i in range(vif_sample_n)}
+            sample_set = {int(i * step + step/2) for i in range(vif_sample_n)}
 
         sampled: List[np.ndarray] = []
         max_needed = max(sample_set) + 1  # 只需解码到最后一个采样点

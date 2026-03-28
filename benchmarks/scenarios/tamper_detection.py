@@ -114,14 +114,11 @@ def _test_phash(w: int, h: int, tamper_type: str) -> ClassificationMetrics:
 
 
 def _test_vif(w: int, h: int, tamper_type: str) -> ClassificationMetrics:
-    """测试 VIF 融合指纹检测。"""
-    import os
-    os.environ.setdefault("VIF_MODE", "fusion")
-
+    """测试 VIF 宽容匹配初筛检测。"""
     from services.vif import VIFConfig, compute_vif
 
     metrics = ClassificationMetrics()
-    vif_config = VIFConfig(mode="fusion")
+    vif_config = VIFConfig()
 
     for i in range(_NUM_SAMPLES):
         orig = generate_frame(w, h, seed=i)
@@ -132,7 +129,7 @@ def _test_vif(w: int, h: int, tamper_type: str) -> ClassificationMetrics:
         # 正样本（篡改）
         tampered = apply_tamper(orig, tamper_type, intensity=0.5, seed=i + 10000)
         tam_vif = compute_vif([tampered], vif_config)
-        if tam_vif and _vif_distance(orig_vif, tam_vif) > 0.3:
+        if tam_vif and _vif_distance(orig_vif, tam_vif) > 0.35:
             metrics.tp += 1
         else:
             metrics.fn += 1
@@ -140,7 +137,7 @@ def _test_vif(w: int, h: int, tamper_type: str) -> ClassificationMetrics:
         # 负样本
         reencoded = _simulate_reencode(orig, seed=i + 20000)
         re_vif = compute_vif([reencoded], vif_config)
-        if re_vif and _vif_distance(orig_vif, re_vif) > 0.3:
+        if re_vif and _vif_distance(orig_vif, re_vif) > 0.35:
             metrics.fp += 1
         else:
             metrics.tn += 1
