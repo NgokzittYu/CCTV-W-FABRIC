@@ -36,20 +36,19 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-#### 3. 启动 MinIO 存储
+#### 3. 启动 IPFS 存储集群
 
 ```bash
-# 启动MinIO容器
-docker run -d \
-  -p 9000:9000 \
-  -p 9001:9001 \
-  --name minio \
-  -e "MINIO_ROOT_USER=minioadmin" \
-  -e "MINIO_ROOT_PASSWORD=minioadmin" \
-  minio/minio server /data --console-address ":9001"
+# 启动 3 节点 IPFS Kubo 集群
+docker compose -f docker-compose.ipfs.yml up -d
 
-# 访问 http://localhost:9001 创建 bucket: video-evidence
+# 验证节点状态
+docker compose -f docker-compose.ipfs.yml ps
+
+# 访问 http://localhost:5001/webui 查看节点 WebUI
 ```
+
+> 更多详细配置参见 [IPFS_SETUP.md](../IPFS_SETUP.md)
 
 #### 4. 启动 Hyperledger Fabric 网络
 
@@ -70,11 +69,10 @@ cd ../..
 在项目根目录创建 `.env` 文件：
 
 ```bash
-# MinIO配置
-MINIO_ENDPOINT=localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET_NAME=video-evidence
+# IPFS 配置
+IPFS_API_URL=http://localhost:5001
+IPFS_GATEWAY_URL=http://localhost:8080
+IPFS_PIN_ENABLED=true
 
 # Fabric配置
 FABRIC_SAMPLES_PATH=./fabric-samples
@@ -155,10 +153,10 @@ peer chaincode query -C mychannel -n cctv \
 
 ## 🔍 故障排查 (Troubleshooting)
 
-### 1. MinIO 连接失败
-- 检查 MinIO 容器状态：`docker ps | grep minio`
-- 查看日志：`docker logs minio`
-- 重启容器：`docker restart minio`
+### 1. IPFS 连接失败
+- 检查 IPFS 容器状态：`docker compose -f docker-compose.ipfs.yml ps`
+- 查看日志：`docker compose -f docker-compose.ipfs.yml logs ipfs-node0`
+- 重启集群：`docker compose -f docker-compose.ipfs.yml restart`
 
 ### 2. Fabric 网络启动失败
 - 清理旧网络：进入 `fabric-samples/test-network` 执行 `./network.sh down`

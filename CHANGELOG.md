@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.5.0 (2026-03-30) — 存储层升级：MinIO → IPFS 去中心化内容寻址
+
+### 核心升级
+
+- **存储架构革新**：从 MinIO 中心化对象存储迁移至 IPFS 去中心化内容寻址存储
+  - 消除存储层单点信任假设：CID 即完整性证明，无需信任存储节点
+  - 协议层保证数据完整性：`ipfs cat(CID)` 返回的内容哈希一定匹配 CID
+  - 存储/索引/验证三位一体：IPFS CIDv1 同时作为存储标识、索引键和链上凭证
+
+### Added
+
+- **[NEW] `services/ipfs_storage.py`** — IPFS 存储服务
+  - `VideoStorage` 类保持与原 MinIO 版本相同的接口签名
+  - 内置轻量级 `IPFSClient`（基于 Kubo RPC API）
+  - 内置 `IPFSIndex` SQLite 索引（`data/ipfs_index.db`）
+  - 新增方法：`pin_cid()`、`get_node_stats()`、`get_gateway_url()`
+  - SHA-256 → IPFS CID 自动查找（向后兼容旧代码）
+- **[NEW] `docker-compose.ipfs.yml`** — 3 节点 IPFS Kubo 集群
+  - node0: API 5001, Gateway 8080
+  - node1: API 5002, Gateway 8081
+  - node2: API 5003, Gateway 8082
+- **[NEW] `IPFS_SETUP.md`** — IPFS 集群安装与启动指南
+- **[NEW] `test_ipfs_storage.py`** — IPFS 集成测试（含跨节点验证）
+
+### Changed
+
+- **`config.py`** — MinIO 5 项配置 → IPFS 3 项配置（无密钥管理）
+  - `ipfs_api_url`（默认 `http://localhost:5001`）
+  - `ipfs_gateway_url`（默认 `http://localhost:8080`）
+  - `ipfs_pin_enabled`（默认 `true`）
+- **`services/gop_verifier.py`** — 导入切换至 `ipfs_storage`
+- **`scripts/tamper_demo.py`** — `--skip-minio` → `--skip-ipfs`
+- **`.env` / `.env.example`** — 新增 IPFS 配置项
+- **`requirements.txt`** — `minio` → `ipfshttpclient>=0.8.0a2`
+- **`README.md`** — 架构图与存储层描述更新
+- **`demo/templates/index.html`** — 存储层描述更新
+- **`demo/app.py`** — 注释更新
+
+### Removed
+
+- **[DELETE] `services/minio_storage.py`** — MinIO 存储服务
+- **[DELETE] `test_minio_storage.py`** — MinIO 集成测试
+- **[DELETE] `MINIO_SETUP.md`** — MinIO 安装指南
+
+
 ## 2026-03-28 (Phase 4 VIF 模块重构与协议收敛)
 
 ### Changed

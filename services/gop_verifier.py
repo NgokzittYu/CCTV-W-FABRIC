@@ -1,6 +1,6 @@
 """
 GOP 完整性验证服务
-用于验证存储在 MinIO 中的 GOP 是否与区块链上的 Merkle 根匹配
+用于验证存储在 IPFS 中的 GOP 是否与区块链上的 Merkle 根匹配
 """
 
 import hashlib
@@ -9,7 +9,7 @@ import logging
 from typing import Dict
 from pathlib import Path
 
-from services.minio_storage import VideoStorage
+from services.ipfs_storage import VideoStorage
 from services.merkle_utils import MerkleTree
 from services.fabric_client import verify_anchor
 
@@ -32,7 +32,7 @@ class GOPVerifier:
         初始化 GOP 验证器
 
         Args:
-            storage: MinIO 存储服务实例
+            storage: IPFS 存储服务实例
             fabric_env: Fabric 环境变量
             orderer_ca: Orderer CA 证书路径
             org2_tls: Org2 TLS 证书路径
@@ -65,7 +65,7 @@ class GOPVerifier:
             FileNotFoundError: 如果 Merkle 树 JSON 或 GOP 文件不存在
             ValueError: 如果 gop_index 超出范围
         """
-        # 1. 从 MinIO 下载 Merkle 树 JSON
+        # 1. 从 IPFS 下载 Merkle 树 JSON
         merkle_tree_filename = f"merkle_tree_{epoch_id}.json"
         try:
             tree_data = self.storage.download_json(device_id, merkle_tree_filename)
@@ -87,7 +87,7 @@ class GOPVerifier:
         cid = tree._original_leaves[gop_index]
         logger.info(f"Verifying GOP at index {gop_index}, CID: {cid[:8]}...")
 
-        # 4. 从 MinIO 下载 GOP 字节
+        # 4. 从 IPFS 下载 GOP 字节（IPFS 协议层保证内容完整性）
         try:
             gop_bytes = self.storage.download_gop(device_id, cid)
         except FileNotFoundError:

@@ -2,7 +2,7 @@
 SecureLens Demo — 独立演示前端。
 
 单命令启动：python demo/app.py
-不依赖 Fabric / MinIO，使用 YOLO nano 轻量模型。
+不依赖 Fabric / IPFS，使用 YOLO nano 轻量模型。
 """
 
 import base64

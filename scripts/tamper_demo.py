@@ -10,7 +10,7 @@
 Usage:
     python scripts/tamper_demo.py
     python scripts/tamper_demo.py --video path/to/video.mp4
-    python scripts/tamper_demo.py --skip-minio --tamper-gop 3
+    python scripts/tamper_demo.py --skip-ipfs --tamper-gop 3
 """
 import argparse
 import copy
@@ -124,11 +124,11 @@ def ensure_test_video(video_path: str | None, tmp_dir: str) -> str:
 
 def register_video(
     video_path: str,
-    skip_minio: bool,
+    skip_ipfs: bool,
     device_id: str = "demo_cam_001",
 ):
     """
-    存证阶段：切分 → 哈希 → Merkle 树 → 可选 MinIO → 模拟上链
+    存证阶段：切分 → 哈希 → Merkle 树 → 可选 IPFS → 模拟上链
 
     Returns:
         (gops, merkle_tree, htree, segment_root)
@@ -183,26 +183,24 @@ def register_video(
     segment_root = htree.close_segment()
     console.print(f"   SegmentRoot = {segment_root[:32]}...")
 
-    # 5) MinIO 存储（可选）
+    # 5) IPFS 存储（可选）
     storage = None
-    if not skip_minio:
+    if not skip_ipfs:
         try:
-            from services.minio_storage import VideoStorage
-            console.print("[cyan]④ 上传 GOP 到 MinIO ...[/cyan]")
+            from services.ipfs_storage import VideoStorage
+            console.print("[cyan]④ 上传 GOP 到 IPFS ...[/cyan]")
             storage = VideoStorage(
-                endpoint=SETTINGS.minio_endpoint,
-                access_key=SETTINGS.minio_access_key,
-                secret_key=SETTINGS.minio_secret_key,
-                bucket_name=SETTINGS.minio_bucket_name,
-                secure=SETTINGS.minio_secure,
+                api_url=SETTINGS.ipfs_api_url,
+                gateway_url=SETTINGS.ipfs_gateway_url,
+                pin_enabled=SETTINGS.ipfs_pin_enabled,
             )
             for g in gops:
                 storage.upload_gop(device_id, g)
-            console.print(f"   已上传 {len(gops)} 个 GOP 到 MinIO\n")
+            console.print(f"   已上传 {len(gops)} 个 GOP 到 IPFS\n")
         except Exception as e:
-            console.print(f"[yellow]   MinIO 不可用，跳过存储步骤: {e}[/yellow]\n")
+            console.print(f"[yellow]   IPFS 不可用，跳过存储步骤: {e}[/yellow]\n")
     else:
-        console.print("[dim]④ 跳过 MinIO 存储 (--skip-minio)[/dim]\n")
+        console.print("[dim]④ 跳过 IPFS 存储 (--skip-ipfs)[/dim]\n")
 
     # 6) 模拟上链
     console.print("[cyan]⑤ 模拟 Fabric 上链 ...[/cyan]")
@@ -486,7 +484,7 @@ def main():
         description="CCTV 视频证据完整性验证 — 端到端篡改检测演示"
     )
     parser.add_argument("--video", type=str, default=None, help="输入视频路径（不指定则自动生成测试视频）")
-    parser.add_argument("--skip-minio", action="store_true", help="跳过 MinIO 存储步骤")
+    parser.add_argument("--skip-ipfs", action="store_true", help="跳过 IPFS 存储步骤")
     parser.add_argument("--tamper-gop", type=int, default=2, help="场景 3 中要篡改的 GOP 索引 (默认: 2)")
     parser.add_argument(
         "--hamming-threshold", type=int, default=SETTINGS.phash_hamming_threshold,
@@ -515,7 +513,7 @@ def main():
 
         # 存证阶段
         gops, merkle_tree, htree, segment_root = register_video(
-            video_path, skip_minio=args.skip_minio,
+            video_path, skip_ipfs=args.skip_ipfs,
         )
 
         # 场景 1: INTACT

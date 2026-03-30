@@ -2,7 +2,7 @@
 
 These tests require:
 1. Running Fabric test-network with evidence chaincode deployed
-2. Running MinIO instance
+2. Running IPFS node (docker compose -f docker-compose.ipfs.yml up -d)
 3. Set FABRIC_SAMPLES_PATH if default ~/projects/fabric-samples doesn't apply
 
 Run:
@@ -20,7 +20,7 @@ import pytest
 from services.fabric_client import build_fabric_env, submit_anchor
 from services.gop_splitter import GOPData
 from services.merkle_utils import MerkleTree, compute_leaf_hash
-from services.minio_storage import VideoStorage
+from services.ipfs_storage import VideoStorage
 from services.gop_verifier import GOPVerifier
 from services.perceptual_hash import compute_phash
 from services.tri_state_verifier import TriStateVerifier
@@ -103,26 +103,25 @@ def fabric_cfg():
 
 
 @pytest.fixture(scope="module")
-def minio_storage():
-    """Create MinIO storage instance."""
+def ipfs_storage():
+    """Create IPFS storage instance."""
     storage = VideoStorage(
-        endpoint=SETTINGS.minio_endpoint,
-        access_key=SETTINGS.minio_access_key,
-        secret_key=SETTINGS.minio_secret_key,
-        bucket_name=SETTINGS.minio_bucket_name,
-        secure=False,
+        api_url=SETTINGS.ipfs_api_url,
+        gateway_url=SETTINGS.ipfs_gateway_url,
+        pin_enabled=SETTINGS.ipfs_pin_enabled,
+        index_db_path="data/ipfs_test_e2e_index.db",
     )
     return storage
 
 
 @pytest.fixture(scope="module")
-def gop_verifier(minio_storage, fabric_env, fabric_cfg):
+def gop_verifier(ipfs_storage, fabric_env, fabric_cfg):
     """Create GOP verifier instance."""
     env, orderer_ca, org2_tls = fabric_env
     channel, chaincode = fabric_cfg
 
     verifier = GOPVerifier(
-        storage=minio_storage,
+        storage=ipfs_storage,
         fabric_env=env,
         orderer_ca=orderer_ca,
         org2_tls=org2_tls,
@@ -141,7 +140,7 @@ class TestGOPVerificationE2E:
     """End-to-end GOP verification tests."""
 
     def test_gop_verification_intact(
-        self, minio_storage, fabric_env, fabric_cfg, gop_verifier
+        self, ipfs_storage, fabric_env, fabric_cfg, gop_verifier
     ):
         """Test verification of intact GOP returns INTACT status."""
         env, orderer_ca, org2_tls = fabric_env
@@ -151,19 +150,19 @@ class TestGOPVerificationE2E:
         device_id = f"device_intact_{uuid.uuid4().hex[:8]}"
         gops = [_create_synthetic_gop(i, size=512) for i in range(4)]
 
-        # 2. Upload GOPs to MinIO
+        # 2. Upload GOPs to IPFS
         cids = []
         for gop in gops:
-            cid = minio_storage.upload_gop(device_id, gop)
+            cid = ipfs_storage.upload_gop(device_id, gop)
             cids.append(cid)
 
         # 3. Build Merkle tree
         tree = MerkleTree(cids)
 
-        # 4. Upload Merkle tree JSON to MinIO
+        # 4. Upload Merkle tree JSON to IPFS
         epoch_id = _unique_epoch_id("intact")
         tree_filename = f"merkle_tree_{epoch_id}.json"
-        minio_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
+        ipfs_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
 
         # 5. Submit anchor to Fabric
         timestamp = str(int(time.time()))
@@ -183,7 +182,7 @@ class TestGOPVerificationE2E:
         assert verification_result["details"]["gop_index"] == 0
 
     def test_gop_verification_tampered(
-        self, minio_storage, fabric_env, fabric_cfg, gop_verifier
+        self, ipfs_storage, fabric_env, fabric_cfg, gop_verifier
     ):
         """Test verification of tampered GOP returns NOT_INTACT status."""
         env, orderer_ca, org2_tls = fabric_env
@@ -193,10 +192,10 @@ class TestGOPVerificationE2E:
         device_id = f"device_tampered_{uuid.uuid4().hex[:8]}"
         gops = [_create_synthetic_gop(i, size=512) for i in range(4)]
 
-        # 2. Upload GOPs to MinIO
+        # 2. Upload GOPs to IPFS
         cids = []
         for gop in gops:
-            cid = minio_storage.upload_gop(device_id, gop)
+            cid = ipfs_storage.upload_gop(device_id, gop)
             cids.append(cid)
 
         # 3. Build Merkle tree
@@ -205,7 +204,7 @@ class TestGOPVerificationE2E:
         # 4. Upload Merkle tree JSON
         epoch_id = _unique_epoch_id("tampered")
         tree_filename = f"merkle_tree_{epoch_id}.json"
-        minio_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
+        ipfs_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
 
         # 5. Submit anchor to Fabric
         timestamp = str(int(time.time()))
@@ -216,22 +215,18 @@ class TestGOPVerificationE2E:
         )
         assert result["tx_id"]
 
-        # 6. Tamper with GOP[0] in MinIO
+        # 6. Tamper simulation: In IPFS, content is immutable (CID = hash).
+        # Tampering is simulated by uploading different content and
+        # modifying the index to map the original CID to the tampered content.
         tampered_content = b"TAMPERED_DATA" + b"\x00" * 499
-        tampered_cid = hashlib.sha256(tampered_content).hexdigest()
+        tampered_cid = ipfs_storage.client.add_bytes(tampered_content, pin=True, cid_version=1)
 
-        # Upload tampered GOP with original CID's path
-        timestamp_int = int(gops[0].start_time)
-        tampered_object_name = f"{device_id}/t_{timestamp_int}/{cids[0]}.h264"
-
-        import io
-        minio_storage.client.put_object(
-            bucket_name=minio_storage.bucket,
-            object_name=tampered_object_name,
-            data=io.BytesIO(tampered_content),
-            length=len(tampered_content),
-            content_type="video/h264",
+        # Update the SQLite index to point original SHA-256 → tampered CID
+        ipfs_storage._index._conn.execute(
+            "UPDATE gop_index SET ipfs_cid = ? WHERE device_id = ? AND sha256_hash = ?",
+            (tampered_cid, device_id, gops[0].sha256_hash),
         )
+        ipfs_storage._index._conn.commit()
 
         # 7. Verify GOP[0] - should be NOT_INTACT
         verification_result = gop_verifier.verify_gop(device_id, epoch_id, 0)
@@ -241,7 +236,7 @@ class TestGOPVerificationE2E:
         assert "reason" in verification_result
 
     def test_gop_verification_single_byte_tamper(
-        self, minio_storage, fabric_env, fabric_cfg, gop_verifier
+        self, ipfs_storage, fabric_env, fabric_cfg, gop_verifier
     ):
         """Test that even a single byte modification is detected."""
         env, orderer_ca, org2_tls = fabric_env
@@ -251,10 +246,10 @@ class TestGOPVerificationE2E:
         device_id = f"device_singlebyte_{uuid.uuid4().hex[:8]}"
         gops = [_create_synthetic_gop(i, size=512) for i in range(4)]
 
-        # 2. Upload GOPs to MinIO
+        # 2. Upload GOPs to IPFS
         cids = []
         for gop in gops:
-            cid = minio_storage.upload_gop(device_id, gop)
+            cid = ipfs_storage.upload_gop(device_id, gop)
             cids.append(cid)
 
         # 3. Build Merkle tree
@@ -263,7 +258,7 @@ class TestGOPVerificationE2E:
         # 4. Upload Merkle tree JSON
         epoch_id = _unique_epoch_id("singlebyte")
         tree_filename = f"merkle_tree_{epoch_id}.json"
-        minio_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
+        ipfs_storage.upload_json(device_id, tree_filename, json.loads(tree.to_json()))
 
         # 5. Submit anchor to Fabric
         timestamp = str(int(time.time()))
@@ -274,26 +269,23 @@ class TestGOPVerificationE2E:
         )
         assert result["tx_id"]
 
-        # 6. Download GOP[0], modify single byte, re-upload
-        original_bytes = minio_storage.download_gop(device_id, cids[0])
+        # 6. Download GOP[0], modify single byte, re-upload as new CID
+        original_bytes = ipfs_storage.download_gop(device_id, cids[0])
 
         # Modify byte at position 100 (increment by 1)
         tampered_bytes = bytearray(original_bytes)
         tampered_bytes[100] = (tampered_bytes[100] + 1) % 256
         tampered_bytes = bytes(tampered_bytes)
 
-        # Re-upload with same path
-        timestamp_int = int(gops[0].start_time)
-        object_name = f"{device_id}/t_{timestamp_int}/{cids[0]}.h264"
+        # Upload tampered content → gets a new CID
+        tampered_cid = ipfs_storage.client.add_bytes(bytes(tampered_bytes), pin=True, cid_version=1)
 
-        import io
-        minio_storage.client.put_object(
-            bucket_name=minio_storage.bucket,
-            object_name=object_name,
-            data=io.BytesIO(tampered_bytes),
-            length=len(tampered_bytes),
-            content_type="video/h264",
+        # Simulate tampering by pointing the original SHA-256 → tampered CID in index
+        ipfs_storage._index._conn.execute(
+            "UPDATE gop_index SET ipfs_cid = ? WHERE device_id = ? AND sha256_hash = ?",
+            (tampered_cid, device_id, gops[0].sha256_hash),
         )
+        ipfs_storage._index._conn.commit()
 
         # 7. Verify GOP[0] - should detect single byte change
         verification_result = gop_verifier.verify_gop(device_id, epoch_id, 0)
@@ -310,7 +302,7 @@ class TestGOPVerificationE2E:
             "Single byte change should produce different hash"
 
 
-def test_tri_state_intact(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+def test_tri_state_intact(fabric_env, fabric_cfg, ipfs_storage, gop_verifier):
     """Test tri-state verification: INTACT case (no changes)."""
     import cv2
 
@@ -326,7 +318,7 @@ def test_tri_state_intact(fabric_env, fabric_cfg, minio_storage, gop_verifier):
     assert result == "INTACT", f"Expected INTACT for identical GOP, got {result}"
 
 
-def test_tri_state_re_encoded(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+def test_tri_state_re_encoded(fabric_env, fabric_cfg, ipfs_storage, gop_verifier):
     """Test tri-state verification: RE_ENCODED case (JPEG compression)."""
     import cv2
 
@@ -346,7 +338,7 @@ def test_tri_state_re_encoded(fabric_env, fabric_cfg, minio_storage, gop_verifie
     assert result == "RE_ENCODED", f"Expected RE_ENCODED for JPEG compression, got {result}"
 
 
-def test_tri_state_tampered(fabric_env, fabric_cfg, minio_storage, gop_verifier):
+def test_tri_state_tampered(fabric_env, fabric_cfg, ipfs_storage, gop_verifier):
     """Test tri-state verification: TAMPERED case (different content)."""
     import cv2
 
@@ -365,43 +357,43 @@ def test_tri_state_tampered(fabric_env, fabric_cfg, minio_storage, gop_verifier)
     assert result == "TAMPERED", f"Expected TAMPERED for different content, got {result}"
 
 
-def test_semantic_fingerprint_upload(fabric_env, fabric_cfg, minio_storage):
-    """Test that semantic JSON files are uploaded to MinIO alongside GOP chunks."""
+def test_semantic_fingerprint_upload(fabric_env, fabric_cfg, ipfs_storage):
+    """Test that semantic JSON files are uploaded to IPFS alongside GOP chunks."""
     device_id = "test_device_semantic"
     gops = [_create_synthetic_gop(i) for i in range(2)]
 
     # Upload GOPs
     cids = []
     for gop in gops:
-        cid = minio_storage.upload_gop(device_id, gop)
+        cid = ipfs_storage.upload_gop(device_id, gop)
         cids.append(cid)
 
     # Check if semantic JSON files exist (if semantic extraction succeeded)
     for i, gop in enumerate(gops):
         if gop.semantic_fingerprint:
-            timestamp_int = int(gop.start_time)
-            semantic_path = f"{device_id}/t_{timestamp_int}/{cids[i]}_semantic.json"
+            sem_filename = f"{gop.sha256_hash}_semantic.json"
+            sem_cid = ipfs_storage._index.get_json_cid(device_id, sem_filename)
 
-            # Try to download semantic JSON
-            try:
-                response = minio_storage.client.get_object(
-                    minio_storage.bucket,
-                    semantic_path
-                )
-                semantic_data = json.loads(response.read().decode('utf-8'))
+            if sem_cid:
+                # Download and verify semantic JSON via IPFS
+                try:
+                    json_bytes = ipfs_storage.client.cat(sem_cid)
+                    semantic_data = json.loads(json_bytes.decode('utf-8'))
 
-                # Verify structure
-                assert "gop_id" in semantic_data
-                assert semantic_data["gop_id"] == gop.gop_id
-                assert "timestamp" in semantic_data
-                assert "objects" in semantic_data
-                assert "total_count" in semantic_data
-                assert "semantic_hash" in semantic_data
-                assert semantic_data["semantic_hash"] == gop.semantic_hash
+                    # Verify structure
+                    assert "gop_id" in semantic_data
+                    assert semantic_data["gop_id"] == gop.gop_id
+                    assert "timestamp" in semantic_data
+                    assert "objects" in semantic_data
+                    assert "total_count" in semantic_data
+                    assert "semantic_hash" in semantic_data
+                    assert semantic_data["semantic_hash"] == gop.semantic_hash
 
-                print(f"✓ Semantic JSON verified for GOP {gop.gop_id}")
-            except Exception as e:
-                print(f"Note: Semantic JSON not found for GOP {gop.gop_id}: {e}")
+                    print(f"✓ Semantic JSON verified for GOP {gop.gop_id} (CID: {sem_cid})")
+                except Exception as e:
+                    print(f"Note: Semantic JSON download failed for GOP {gop.gop_id}: {e}")
+            else:
+                print(f"Note: Semantic JSON CID not found for GOP {gop.gop_id}")
 
 
 def test_merkle_tree_with_semantic_hash(fabric_env, fabric_cfg):

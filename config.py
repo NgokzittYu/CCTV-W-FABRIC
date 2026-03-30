@@ -126,12 +126,10 @@ class Settings:
     device_sign_algo: str
     device_signature_required: bool
 
-    # MinIO 对象存储
-    minio_endpoint: str
-    minio_access_key: str
-    minio_secret_key: str
-    minio_bucket_name: str
-    minio_secure: bool
+    # IPFS 去中心化存储
+    ipfs_api_url: str
+    ipfs_gateway_url: str
+    ipfs_pin_enabled: bool
 
     # Perceptual hash verification
     phash_hamming_threshold: int
@@ -190,11 +188,9 @@ def load_settings() -> Settings:
         device_key_path=Path(_env_str("DEVICE_KEY_PATH", "device_keys/default/key.pem")).expanduser().resolve(),
         device_sign_algo=_env_str("DEVICE_SIGN_ALGO", "ECDSA_SHA256"),
         device_signature_required=_env_bool("DEVICE_SIGNATURE_REQUIRED", True),
-        minio_endpoint=_env_str("MINIO_ENDPOINT", "localhost:9000"),
-        minio_access_key=_env_str("MINIO_ACCESS_KEY", "minioadmin"),
-        minio_secret_key=_env_str("MINIO_SECRET_KEY", "minioadmin"),
-        minio_bucket_name=_env_str("MINIO_BUCKET_NAME", "video-evidence"),
-        minio_secure=_env_bool("MINIO_SECURE", False),
+        ipfs_api_url=_env_str("IPFS_API_URL", "http://localhost:5001"),
+        ipfs_gateway_url=_env_str("IPFS_GATEWAY_URL", "http://localhost:8080"),
+        ipfs_pin_enabled=_env_bool("IPFS_PIN_ENABLED", True),
         phash_hamming_threshold=_env_int("PHASH_HAMMING_THRESHOLD", 10),
         semantic_model_path=_env_str("SEMANTIC_MODEL_PATH", "yolov8n.pt"),
         semantic_confidence=_env_float("SEMANTIC_CONFIDENCE", 0.5),
