@@ -31,3 +31,6 @@ benchmarks/sample_videos/
 
 # Device keys / certs for stage3
 device_keys/
+
+# Agent artifacts
+.agent/

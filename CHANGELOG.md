@@ -1,5 +1,88 @@
 # Changelog
 
+## v2.0.0 (2026-04-05) — 竞赛演示系统：全流程交互式前端
+
+### 核心新增
+
+- **[NEW] `demo2/` — 全流程交互式演示系统**
+  - 面向中国大学生计算机设计大赛，完整映射 SecureLens 四层架构
+  - 纯前端 Mock 数据驱动，`npm run dev` 一键启动，无需后端/IPFS/Fabric 服务
+
+### 技术栈
+
+- **Vite + React** — 组件化 SPA 架构
+- **原生 CSS Design System** — Dark Mode OLED 风格，Glassmorphism 毛玻璃卡片
+- **Orbitron + Exo 2** — Web3/区块链科技风格字体
+- **Lucide React** — 统一 SVG 图标
+
+### Added
+
+- **设计系统** (`src/index.css`)
+  - CSS 变量 Token 系统：配色 / 字体 / 间距 / 阴影 / 动画曲线
+  - Emil Kowalski 动效哲学：ease-out 曲线、scale(0.97) 按钮反馈、stagger 交错入场
+  - Glassmorphism 基础样式 + 响应式断点 (1440/1024/768/375px)
+  - `prefers-reduced-motion` 无障碍支持
+
+- **共享组件** (`src/components/`)
+  - `Navbar.jsx` — 顶部固定导航栏，7 模块切换 + 当前模块指示器 + 竞赛徽章
+  - `GlassCard.jsx` — 通用毛玻璃卡片，IntersectionObserver 滚动淡入，可配置发光色
+  - `StatusBadge.jsx` — 三态验证标签（INTACT / RE_ENCODED / TAMPERED）
+  - `AnimatedCounter.jsx` — 数字计数器动画，滚动触发 + ease-out cubic
+
+- **模块 1: 系统概览** (`src/pages/OverviewPage.jsx`)
+  - Hero 区域 + 四大核心指标动画计数器
+  - 四层架构交互图：点击展开各层 5 项技术细节
+  - 核心技术栈 Bento Grid（6 项）
+
+- **模块 2: 边缘智能** (`src/pages/EdgePage.jsx`)
+  - GOP 时间轴（12 个 GOP，点击展示 SHA-256/pHash/VIF 三重指纹）
+  - VIF v4 四步流水线动画（采样 → CNN → Pooling → LSH）
+  - 三态判定仪表盘（Risk Score gauge + 0.35 阈值标线）
+  - VIF v4 vs 初代方案对比表
+  - YOLO 目标检测统计 + EIS 评分柱状图
+
+- **模块 3: 聚合网关** (`src/pages/GatewayPage.jsx`)
+  - MAB 四臂老虎机可视化（Arm 0-3，间隔 1/2/5/10 GOP）
+  - 100 步 UCB1 模拟引擎（播放/暂停/重置），累计 Reward 曲线实时绘制
+  - 三级 Merkle 树交互式可视化（SegmentRoot → ChunkRoot → GOP Leaf）
+  - Merkle Proof 验证步骤说明
+
+- **模块 4: IPFS 存储** (`src/pages/StoragePage.jsx`)
+  - CID 内容寻址原理四步动画
+  - 3 节点 Kubo 集群状态面板
+  - 模拟上传（进度条 + 3 类 CID 生成）
+  - MinIO vs IPFS 5 维对比表
+
+- **模块 5: 联盟链** (`src/pages/BlockchainPage.jsx`)
+  - 3 Org × 2 Peer 网络拓扑 + Orderer 信息
+  - 智能合约 4 函数卡片（参数列表 + 访问权限）
+  - Anchor → VerifyAnchor 锚定验证三步动画演示
+  - 交易记录浏览器（8 条模拟交易）
+
+- **模块 6: 审计验证** (`src/pages/VerificationPage.jsx`)
+  - 三态验证引擎（INTACT/RE_ENCODED/TAMPERED 可切换）
+  - Risk Score 仪表盘 + Hamming 距离详情
+  - 篡改定位时间轴（GOP 3, GOP 7 红色高亮 + 二分查找说明）
+  - 4 种攻击场景卡片 + VIF 距离进度条
+
+- **模块 7: 对比实验** (`src/pages/BenchmarkPage.jsx`)
+  - MAB 策略对比 SVG 曲线（UCB1 vs Thompson vs Fixed）
+  - VIF 版本对比表（SHA-256 Only vs v1 vs v4）
+  - 锚定频率成本分析柱状图
+  - 6 项性能指标卡片
+
+- **Mock 数据** (`src/data/mockData.js`)
+  - 全部 7 模块的模拟数据集
+  - 含 MAB 100 步模拟生成函数
+
+### Notes
+
+- 新增依赖：`lucide-react`、`recharts`、`framer-motion`
+- 与 `demo/`（Flask 版）并存，互不影响
+- 全中文界面 + 英文技术术语保留
+
+---
+
 ## v1.5.0 (2026-03-30) — 存储层升级：MinIO → IPFS 去中心化内容寻址
 
 ### 核心升级
