@@ -69,7 +69,7 @@ export default function EdgePage() {
                 <div className="detail-item">
                   <Hash size={14} className="text-muted" />
                   <span className="detail-label">SHA-256</span>
-                  <code className="detail-value">{gopList[selectedGop].sha256.slice(0, 32)}...</code>
+                  <code className="detail-value">{gopList[selectedGop].sha256}</code>
                 </div>
                 <div className="detail-item">
                   <Fingerprint size={14} className="text-muted" />
@@ -79,7 +79,7 @@ export default function EdgePage() {
                 <div className="detail-item">
                   <ScanEye size={14} className="text-muted" />
                   <span className="detail-label">VIF v4</span>
-                  <code className="detail-value">{gopList[selectedGop].vif.slice(0, 32)}...</code>
+                  <code className="detail-value">{gopList[selectedGop].vif}</code>
                 </div>
                 <div className="detail-item">
                   <Film size={14} className="text-muted" />
@@ -295,38 +295,53 @@ export default function EdgePage() {
 
         .gop-timeline {
           display: flex;
-          gap: 6px;
+          gap: 12px;
           flex-wrap: wrap;
-          margin-bottom: 24px;
+          margin-bottom: 32px;
         }
         .gop-block {
           position: relative;
-          padding: 12px 14px;
-          border-radius: 8px;
+          padding: 16px 20px;
+          min-width: 90px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          border-radius: 12px;
           background: var(--bg-card);
           border: 1px solid var(--border-color);
           cursor: pointer;
-          transition: all 200ms ease;
+          transition: transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1), background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
           animation: fadeInUp 400ms var(--ease-out) forwards;
           opacity: 0;
         }
-        .gop-block:hover { border-color: var(--accent-blue); }
+        .gop-block:hover { 
+          border-color: var(--accent-blue);
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        .gop-block:active {
+          transform: scale(0.96) translateY(0);
+        }
         .gop-block.selected {
           border-color: var(--accent-blue);
           background: var(--accent-blue-dim);
           box-shadow: var(--shadow-glow-blue);
+          transform: translateY(-2px) scale(1.02);
         }
         .gop-block.anchored .anchor-dot {
           position: absolute;
-          top: 4px;
-          right: 4px;
-          width: 6px;
-          height: 6px;
+          top: 8px;
+          right: 8px;
+          width: 8px;
+          height: 8px;
           border-radius: 50%;
           background: var(--accent-green);
+          box-shadow: 0 0 8px var(--accent-green);
         }
-        .gop-id { font-size: 0.75rem; font-weight: 600; }
-        .gop-frames { font-size: 0.65rem; color: var(--text-muted); }
+        .gop-id { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; }
+        .gop-frames { font-size: 0.75rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
 
         .gop-detail { margin-top: 16px; }
         .detail-grid {

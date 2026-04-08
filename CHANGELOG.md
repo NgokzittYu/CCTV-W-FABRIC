@@ -1,5 +1,85 @@
 # Changelog
 
+## v3.0.0 (2026-04-09) — 产品化重构：双角色全栈应用
+
+### 核心升级
+
+- **架构转型**：从 7 模块技术展板重构为 **角色分流式产品应用**
+  - 管理方后台（Admin Dashboard）—— 监控总览 / 设备管理 / 视频存证 / 告警中心
+  - 验证方平台（Verify Portal）—— 证据验真 / 验真报告 / 历史记录
+  - 登录门户 —— 角色选择 + 预填演示凭证，一键切换双身份
+- **后端真实闭环**：视频上传 → GOP 切分 → VIF 指纹 → Merkle 树 → Fabric 链上锚定 → SQLite 索引，全流程打通
+- **三态验真引擎**：上传待验视频与链上存证逐 GOP 比对，输出 INTACT / RE_ENCODED / TAMPERED 报告
+
+### Added
+
+- **一键服务管理脚本** (`scripts/`)
+  - `start_all.sh` — 按序启动 Fabric 网络 → IPFS 集群 → FastAPI 后端 → Vite 前端
+  - `stop_all.sh` — 逆序安全停止所有服务
+  - `check_services.sh` — 快速检查四个服务存活状态与关键指标
+
+- **SQLite 视频索引层** (`services/video_store.py`)
+  - 三张表：`videos`（存证元数据）、`video_gops`（GOP 级哈希记录）、`verify_history`（验真历史）
+  - WAL 模式 + 线程安全（per-thread 连接池）
+  - CRUD 接口：`insert_video()`、`list_videos()`、`get_video()`、`get_video_gops()`
+  - 验真历史：`insert_verify_record()`、`list_verify_history()`
+
+- **5 个 Video API 端点** (`web_app.py`)
+  - `POST /api/video/upload` — 上传视频 → GOP 切分 → VIF + SHA-256 → Merkle 树 → Fabric 锚定 → SQLite 写入
+  - `GET /api/video/list` — 列出所有已存证视频
+  - `GET /api/video/{video_id}/certificate` — 获取存证证书（含 Merkle Root、TX ID、区块高度、GOP 详情）
+  - `POST /api/video/verify` — 上传待验视频，逐 GOP 三态比对，输出风险评分与 GOP 级报告
+  - `GET /api/video/verify/history` — 查询验真历史记录
+  - CORS 中间件支持前端 `:5173` 跨域请求
+
+- **前端 API 封装** (`demo2/src/services/api.js`)
+  - `uploadVideo()` / `listVideos()` / `getVideoCertificate()` / `verifyVideo()` / `getVerifyHistory()` / `getConfig()`
+  - 统一 API_BASE 配置，fetch + FormData 上传
+
+- **登录页** (`demo2/src/pages/LoginPage.jsx`)
+  - 双角色卡片选择（管理方 🟢 / 验证方 🟣），动态主题色
+  - 粒子飘浮背景动画（6 个径向渐变光球）
+  - 预填演示账号密码，一键登录
+  - Framer Motion 入场动画 + 表单展开过渡
+
+- **侧边栏导航** (`demo2/src/components/Sidebar.jsx`)
+  - 角色感知 Tab 列表（管理方 4 项 / 验证方 3 项）
+  - Spring 动画 `layoutId` 活跃指示器
+  - 品牌区 + 角色标签 + 退出登录
+
+- **管理后台** (`demo2/src/pages/AdminDashboard.jsx`)
+  - **监控总览** Tab — 4 项统计卡片（已存证视频 / 在线设备 / 链上区块 / 活跃告警）+ 最近存证列表
+  - **设备管理** Tab — 6 台模拟设备卡片（在线 / 离线 / 警告三态 + IP + 型号）
+  - **视频存证** Tab — 真实 API：上传视频 → 处理进度 → 视频卡片列表 → 查看存证证书
+  - **告警中心** Tab — 4 条模拟告警（高危 / 中风险 / 低标签 + 脉冲圆点）
+
+- **验证平台** (`demo2/src/pages/VerifyPortal.jsx`)
+  - **证据验真** Tab — 两步流程：选择原始存证 → 上传待验视频 → RiskGauge + 逐 GOP 结果
+  - **验真报告** Tab — 最近一次验真的详细报告（RiskGauge + GOP 条形图）
+  - **历史记录** Tab — 所有验真记录列表（状态图标 + 风险 + 时间）
+
+- **UI 组件** (`demo2/src/components/`)
+  - `CertificateCard.jsx` — 存证证书 Modal（Video ID / Merkle Root / TX ID / Block / GOP 列表 + 联盟链印章）
+  - `RiskGauge.jsx` — SVG 半圆仪表盘（动画弧线 + 三态渐变色 + 风险等级标签）
+  - `VideoCard.jsx` — 视频存证卡片（缩略图占位 + 元数据 + 查看证书按钮）
+
+### Changed
+
+- **`App.jsx`** — 完全重写路由：Login → Sidebar + AdminDashboard / VerifyPortal
+- **`index.css`** — 完整重写设计系统（~950 行）
+  - 新增：登录页、侧边栏、仪表盘布局、统计卡片、设备卡片、视频卡片、证书 Modal、风险仪表盘、验证步骤、GOP 结果条、告警列表、历史列表
+  - 保留：Design Token 系统、Glassmorphism 基础、Orbitron + Exo 2 字体
+  - 新增响应式断点：640px 折叠侧边栏为 Icon-only 模式
+- **`mockData.js`** — 精简为设备列表 + 告警数据（移除旧 7 模块数据）
+
+### Notes
+
+- 旧 7 模块页面文件保留在 `pages/` 目录但不再被路由引用，可用于技术答辩参考
+- Fabric 锚定失败时自动降级为 `offline-xxx` TX ID（非阻断），前端仍可完整展示存证流程
+- `npm run build` 构建成功：index.html 0.63kB + CSS 20.24kB + JS 352.56kB（gzip 116kB）
+
+---
+
 ## v2.0.0 (2026-04-05) — 竞赛演示系统：全流程交互式前端
 
 ### 核心新增

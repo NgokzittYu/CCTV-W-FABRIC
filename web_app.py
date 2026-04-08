@@ -1,13 +1,17 @@
 import asyncio
 import json
+import os
+import shutil
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import cv2
 import torch
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -37,6 +41,16 @@ CONFIDENCE_THRESHOLD = SETTINGS.confidence_threshold
 ROAD_TARGET_CLASS_IDS = SETTINGS.road_target_class_ids
 
 app = FastAPI()
+
+# CORS — allow frontend dev server at :5173
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 templates = Jinja2Templates(directory="templates")
 
 # Global state
@@ -500,6 +514,280 @@ def api_get_batch_details(batch_id: str):
 def api_get_config():
     """Get Fabric configuration."""
     return JSONResponse(get_fabric_config())
+
+
+# ============================================================================
+# Video Evidence API (Phase 1)
+# ============================================================================
+
+from services.video_store import (
+    insert_video,
+    insert_video_gops,
+    list_videos,
+    get_video,
+    get_video_gops,
+    insert_verify_record,
+    list_verify_history,
+)
+
+UPLOAD_DIR = Path("data/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.post("/api/video/upload")
+async def api_video_upload(
+    file: UploadFile = File(...),
+    device_id: str = "cctv-default-01",
+):
+    """Upload video → GOP split → VIF/SHA-256 → Merkle tree → Fabric anchor."""
+    try:
+        # 1. Save uploaded file
+        video_id = f"vid-{uuid.uuid4().hex[:12]}"
+        suffix = Path(file.filename or "video.mp4").suffix
+        save_path = UPLOAD_DIR / f"{video_id}{suffix}"
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        file_size = save_path.stat().st_size
+
+        # 2. GOP split (runs in thread to avoid blocking)
+        from services.gop_splitter import split_gops
+        gops = await asyncio.to_thread(split_gops, str(save_path))
+
+        if not gops:
+            return JSONResponse({"error": "GOP 切分失败，视频可能损坏"}, status_code=400)
+
+        # 3. Build Merkle tree from GOPs
+        from services.merkle_utils import build_merkle_root_and_proofs
+        merkle_root, proofs = build_merkle_root_and_proofs(gops)
+
+        # 4. Sign & anchor to Fabric
+        from services.crypto_utils import build_batch_signature_material
+
+        batch_id = f"batch-{video_id}"
+        event_ids = [f"{video_id}-gop{g.gop_id}" for g in gops]
+        event_hashes = [g.sha256_hash for g in gops]
+
+        cert_path = Path(SETTINGS.device_cert_path)
+        key_path = Path(SETTINGS.device_key_path)
+        sign_algo = SETTINGS.device_sign_algo
+        sig_required = SETTINGS.device_signature_required
+
+        cert_pem, signature_b64, payload_hash = build_batch_signature_material(
+            batch_id, device_id, merkle_root,
+            int(time.time()), int(time.time()),
+            event_ids, event_hashes,
+            cert_path, key_path, sign_algo, sig_required,
+        )
+
+        # 5. Invoke chaincode
+        tx_id = ""
+        block_number = None
+        try:
+            from services.fabric_client import invoke_chaincode, get_latest_block_number
+            fabric_samples = Path(SETTINGS.fabric_samples_path).expanduser().resolve()
+            env, orderer_ca, org2_tls = build_fabric_env(fabric_samples)
+
+            result = invoke_chaincode(
+                env, orderer_ca, org2_tls,
+                CHANNEL_NAME, CHAINCODE_NAME,
+                "CreateEvidenceBatch",
+                [
+                    batch_id, device_id, merkle_root,
+                    str(int(time.time())),
+                    json.dumps(event_ids),
+                    json.dumps(event_hashes),
+                    cert_pem, signature_b64, payload_hash,
+                ],
+            )
+            tx_id = result.get("tx_id", "")
+            block_number = get_latest_block_number(env, CHANNEL_NAME)
+        except Exception as e:
+            print(f"[WARN] Fabric anchor failed (non-fatal): {e}")
+            tx_id = f"offline-{uuid.uuid4().hex[:8]}"
+
+        # 6. Write to SQLite
+        video_rec = insert_video(
+            video_id=video_id,
+            device_id=device_id,
+            filename=file.filename or "unknown",
+            file_size=file_size,
+            gop_count=len(gops),
+            merkle_root=merkle_root,
+            tx_id=tx_id,
+            block_number=block_number,
+        )
+
+        gop_records = [
+            {
+                "video_id": video_id,
+                "gop_index": g.gop_id,
+                "sha256": g.sha256_hash,
+                "vif": g.vif,
+                "start_time": g.start_time,
+                "end_time": g.end_time,
+                "frame_count": g.frame_count,
+                "byte_size": g.byte_size,
+            }
+            for g in gops
+        ]
+        insert_video_gops(video_id, gop_records)
+
+        return JSONResponse({
+            "status": "success",
+            "video_id": video_id,
+            "filename": file.filename,
+            "gop_count": len(gops),
+            "merkle_root": merkle_root,
+            "tx_id": tx_id,
+            "block_number": block_number,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/video/list")
+def api_video_list():
+    """List all archived videos."""
+    videos = list_videos()
+    return JSONResponse({"videos": videos})
+
+
+@app.get("/api/video/{video_id}/certificate")
+def api_video_certificate(video_id: str):
+    """Get video evidence certificate details."""
+    video = get_video(video_id)
+    if not video:
+        return JSONResponse({"error": "Video not found"}, status_code=404)
+
+    gops = get_video_gops(video_id)
+    return JSONResponse({
+        "status": "success",
+        **video,
+        "gops": gops,
+    })
+
+
+@app.post("/api/video/verify")
+async def api_video_verify(
+    file: UploadFile = File(...),
+    original_video_id: str = "",
+):
+    """Verify uploaded video against original evidence."""
+    try:
+        if not original_video_id:
+            return JSONResponse({"error": "必须指定 original_video_id"}, status_code=400)
+
+        # 1. Check original exists
+        original = get_video(original_video_id)
+        if not original:
+            return JSONResponse({"error": "原始视频不存在"}, status_code=404)
+
+        original_gops = get_video_gops(original_video_id)
+        if not original_gops:
+            return JSONResponse({"error": "原始 GOP 记录不存在"}, status_code=404)
+
+        # 2. Save uploaded file
+        suffix = Path(file.filename or "video.mp4").suffix
+        tmp_path = UPLOAD_DIR / f"verify-{uuid.uuid4().hex[:8]}{suffix}"
+        with open(tmp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # 3. GOP split the uploaded file
+        from services.gop_splitter import split_gops
+        curr_gops = await asyncio.to_thread(split_gops, str(tmp_path))
+
+        # 4. Compare GOPs using TriStateVerifier
+        from services.tri_state_verifier import TriStateVerifier
+        verifier = TriStateVerifier()
+
+        gop_results = []
+        worst_status = "INTACT"
+        max_risk = 0.0
+        status_priority = {"INTACT": 0, "RE_ENCODED": 1, "TAMPERED": 2}
+
+        compare_count = min(len(original_gops), len(curr_gops))
+        for i in range(compare_count):
+            orig = original_gops[i]
+            curr = curr_gops[i] if i < len(curr_gops) else None
+
+            if curr is None:
+                gop_results.append({
+                    "gop_index": i,
+                    "status": "TAMPERED",
+                    "risk": 1.0,
+                    "detail": "GOP 缺失",
+                })
+                worst_status = "TAMPERED"
+                max_risk = 1.0
+                continue
+
+            status, risk, details = verifier.verify(
+                orig["sha256"], curr.sha256_hash,
+                orig.get("vif"), curr.vif,
+            )
+            gop_results.append({
+                "gop_index": i,
+                "status": status,
+                "risk": round(risk, 4),
+                "detail": details.get("state_desc", status),
+            })
+            if status_priority.get(status, 0) > status_priority.get(worst_status, 0):
+                worst_status = status
+            max_risk = max(max_risk, risk)
+
+        # Handle GOP count mismatch
+        if len(curr_gops) != len(original_gops):
+            for i in range(compare_count, max(len(original_gops), len(curr_gops))):
+                gop_results.append({
+                    "gop_index": i,
+                    "status": "TAMPERED",
+                    "risk": 1.0,
+                    "detail": "GOP 数量不匹配",
+                })
+            if worst_status != "TAMPERED":
+                worst_status = "TAMPERED" if abs(len(curr_gops) - len(original_gops)) > 1 else "RE_ENCODED"
+            max_risk = max(max_risk, 0.8)
+
+        # 5. Save verify history
+        record = insert_verify_record(
+            original_video_id=original_video_id,
+            uploaded_filename=file.filename or "unknown",
+            overall_status=worst_status,
+            overall_risk=round(max_risk, 4),
+            gop_results=gop_results,
+        )
+
+        # Cleanup temp file
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return JSONResponse({
+            "status": "success",
+            "verify_id": record["id"],
+            "overall_status": worst_status,
+            "overall_risk": round(max_risk, 4),
+            "original_gop_count": len(original_gops),
+            "current_gop_count": len(curr_gops),
+            "gop_results": gop_results,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/video/verify/history")
+def api_verify_history(limit: int = 50):
+    """Get verification history."""
+    history = list_verify_history(limit)
+    return JSONResponse({"history": history})
 
 
 # ============================================================================
