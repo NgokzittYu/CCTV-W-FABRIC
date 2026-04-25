@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 def hex_bit_hamming(h1: str, h2: str) -> int:
-    return (int(h1, 16) ^ int(h2, 16)).bit_count()
+    xor_value = int(h1, 16) ^ int(h2, 16)
+    bit_count = getattr(xor_value, "bit_count", None)
+    if callable(bit_count):
+        return bit_count()
+    return bin(xor_value).count("1")
 
 
 class TriStateVerifier:

@@ -8,15 +8,19 @@ IPFS 原生内容寻址保证：CID = 内容哈希 = 完整性证明。
 
 import io
 import json
+import base64
 import hashlib
 import logging
 import sqlite3
 import time
+from fractions import Fraction
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
+import av
 import requests
 
+from services.gop_timing import normalize_gop_bounds
 from services.gop_splitter import GOPData
 
 logger = logging.getLogger(__name__)
@@ -162,8 +166,38 @@ class IPFSIndex:
                 UNIQUE(device_id, filename)
             );
         """)
+        self._ensure_gop_columns()
         self._conn.commit()
         logger.info(f"IPFS index initialized: {self.db_path}")
+
+    def _ensure_gop_columns(self):
+        """对旧索引库做向后兼容迁移，补齐播放重建所需字段。"""
+        expected_columns = {
+            "codec_name": "TEXT",
+            "codec_extradata_b64": "TEXT",
+            "width": "INTEGER",
+            "height": "INTEGER",
+            "pix_fmt": "TEXT",
+            "time_base_num": "INTEGER",
+            "time_base_den": "INTEGER",
+            "frame_rate_num": "INTEGER",
+            "frame_rate_den": "INTEGER",
+            "packet_sizes_json": "TEXT",
+            "packet_pts_json": "TEXT",
+            "packet_dts_json": "TEXT",
+            "packet_keyframes_json": "TEXT",
+            "duration_seconds": "REAL",
+        }
+        existing = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(gop_index)").fetchall()
+        }
+        for column, column_type in expected_columns.items():
+            if column in existing:
+                continue
+            self._conn.execute(
+                f"ALTER TABLE gop_index ADD COLUMN {column} {column_type}"
+            )
 
     def insert_gop(
         self,
@@ -173,13 +207,54 @@ class IPFSIndex:
         ipfs_cid: str,
         sha256_hash: str,
         byte_size: int,
+        content_type: str = "video/h264",
+        codec_name: Optional[str] = None,
+        codec_extradata_b64: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        pix_fmt: Optional[str] = None,
+        time_base_num: Optional[int] = None,
+        time_base_den: Optional[int] = None,
+        frame_rate_num: Optional[int] = None,
+        frame_rate_den: Optional[int] = None,
+        packet_sizes: Optional[List[int]] = None,
+        packet_pts: Optional[List[Optional[int]]] = None,
+        packet_dts: Optional[List[Optional[int]]] = None,
+        packet_keyframes: Optional[List[bool]] = None,
+        duration_seconds: Optional[float] = None,
     ):
         """记录 GOP 上传信息"""
         self._conn.execute(
             """INSERT OR REPLACE INTO gop_index
-               (device_id, gop_id, timestamp, ipfs_cid, sha256_hash, byte_size)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (device_id, gop_id, timestamp, ipfs_cid, sha256_hash, byte_size),
+               (device_id, gop_id, timestamp, ipfs_cid, sha256_hash, byte_size, content_type,
+                codec_name, codec_extradata_b64, width, height, pix_fmt,
+                time_base_num, time_base_den, frame_rate_num, frame_rate_den,
+                packet_sizes_json, packet_pts_json, packet_dts_json, packet_keyframes_json,
+                duration_seconds)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                device_id,
+                gop_id,
+                timestamp,
+                ipfs_cid,
+                sha256_hash,
+                byte_size,
+                content_type,
+                codec_name,
+                codec_extradata_b64,
+                width,
+                height,
+                pix_fmt,
+                time_base_num,
+                time_base_den,
+                frame_rate_num,
+                frame_rate_den,
+                json.dumps(packet_sizes) if packet_sizes is not None else None,
+                json.dumps(packet_pts) if packet_pts is not None else None,
+                json.dumps(packet_dts) if packet_dts is not None else None,
+                json.dumps(packet_keyframes) if packet_keyframes is not None else None,
+                duration_seconds,
+            ),
         )
         self._conn.commit()
 
@@ -191,11 +266,17 @@ class IPFSIndex:
     ) -> List[Dict]:
         """按时间范围查询 GOP"""
         cursor = self._conn.execute(
-            """SELECT device_id, gop_id, timestamp, ipfs_cid, sha256_hash, byte_size
+            """SELECT device_id, gop_id, timestamp, ipfs_cid, sha256_hash, byte_size,
+                      content_type, codec_name, codec_extradata_b64, width, height, pix_fmt,
+                      time_base_num, time_base_den, frame_rate_num, frame_rate_den,
+                      packet_sizes_json, packet_pts_json, packet_dts_json, packet_keyframes_json,
+                      duration_seconds
                FROM gop_index
-               WHERE device_id = ? AND timestamp BETWEEN ? AND ?
+               WHERE device_id = ?
+                 AND timestamp <= ?
+                 AND (timestamp + COALESCE(duration_seconds, 0)) >= ?
                ORDER BY timestamp ASC""",
-            (device_id, start_time, end_time),
+            (device_id, end_time, start_time),
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -208,6 +289,29 @@ class IPFSIndex:
         )
         row = cursor.fetchone()
         return row["ipfs_cid"] if row else None
+
+    def get_gop_record(
+        self,
+        device_id: str,
+        *,
+        sha256_hash: Optional[str] = None,
+        ipfs_cid: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """查找单个 GOP 的完整索引记录。"""
+        if sha256_hash:
+            cursor = self._conn.execute(
+                "SELECT * FROM gop_index WHERE device_id = ? AND sha256_hash = ?",
+                (device_id, sha256_hash),
+            )
+        elif ipfs_cid:
+            cursor = self._conn.execute(
+                "SELECT * FROM gop_index WHERE device_id = ? AND ipfs_cid = ?",
+                (device_id, ipfs_cid),
+            )
+        else:
+            raise ValueError("Either sha256_hash or ipfs_cid must be provided")
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     def insert_json(
         self,
@@ -234,6 +338,21 @@ class IPFSIndex:
         )
         row = cursor.fetchone()
         return row["ipfs_cid"] if row else None
+
+    def get_gop_time_bounds(self) -> List[Dict[str, Any]]:
+        """返回每个设备已索引 GOP 的最早/最晚时间。"""
+        cursor = self._conn.execute(
+            """
+            SELECT device_id,
+                   MIN(timestamp) AS earliest_timestamp,
+                   MAX(timestamp) AS latest_timestamp,
+                   COUNT(*) AS gop_count
+            FROM gop_index
+            GROUP BY device_id
+            ORDER BY latest_timestamp DESC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def close(self):
         """关闭数据库连接"""
@@ -282,7 +401,67 @@ class VideoStorage:
             logger.error(f"Failed to connect to IPFS node at {api_url}: {e}")
             raise
 
-    def upload_gop(self, device_id: str, gop: GOPData) -> str:
+    @staticmethod
+    def _decode_json_list(value: Optional[str]) -> Optional[List[Any]]:
+        if not value:
+            return None
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+
+    def _normalize_gop_record(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """将 SQLite 行转换为更易使用的结构。"""
+        record = dict(row)
+        record["packet_sizes"] = self._decode_json_list(record.get("packet_sizes_json"))
+        record["packet_pts"] = self._decode_json_list(record.get("packet_pts_json"))
+        record["packet_dts"] = self._decode_json_list(record.get("packet_dts_json"))
+        record["packet_keyframes"] = self._decode_json_list(record.get("packet_keyframes_json"))
+        start_time = float(record.get("timestamp") or 0.0)
+        stored_duration = float(record.get("duration_seconds") or 0.0)
+        _, _, normalized_duration = normalize_gop_bounds(
+            start_time,
+            start_time + stored_duration,
+            packet_pts=record.get("packet_pts"),
+            time_base_num=record.get("time_base_num"),
+            time_base_den=record.get("time_base_den"),
+            frame_rate_num=record.get("frame_rate_num"),
+            frame_rate_den=record.get("frame_rate_den"),
+        )
+        record["duration_seconds"] = normalized_duration
+        return record
+
+    @staticmethod
+    def has_playback_metadata(record: Optional[Dict[str, Any]]) -> bool:
+        """判断该 GOP 是否具备按需回放所需的最小元数据。"""
+        if not record:
+            return False
+        required = (
+            record.get("codec_name"),
+            record.get("time_base_num"),
+            record.get("time_base_den"),
+            record.get("packet_sizes"),
+        )
+        return all(required) and bool(record.get("packet_pts")) and bool(record.get("packet_dts"))
+
+    def get_gop_record(
+        self,
+        device_id: str,
+        *,
+        sha256_hash: Optional[str] = None,
+        ipfs_cid: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        row = self._index.get_gop_record(device_id, sha256_hash=sha256_hash, ipfs_cid=ipfs_cid)
+        return self._normalize_gop_record(row) if row else None
+
+    def upload_gop(
+        self,
+        device_id: str,
+        gop: GOPData,
+        *,
+        timestamp_override: Optional[float] = None,
+        duration_override: Optional[float] = None,
+    ) -> str:
         """
         上传 GOP 分片到 IPFS
 
@@ -305,10 +484,29 @@ class VideoStorage:
             self._index.insert_gop(
                 device_id=device_id,
                 gop_id=gop.gop_id,
-                timestamp=gop.start_time,
+                timestamp=timestamp_override if timestamp_override is not None else gop.start_time,
                 ipfs_cid=ipfs_cid,
                 sha256_hash=gop.sha256_hash,
                 byte_size=gop.byte_size,
+                content_type="video/h264",
+                codec_name=gop.codec_name,
+                codec_extradata_b64=gop.codec_extradata_b64,
+                width=gop.width,
+                height=gop.height,
+                pix_fmt=gop.pix_fmt,
+                time_base_num=gop.time_base_num,
+                time_base_den=gop.time_base_den,
+                frame_rate_num=gop.frame_rate_num,
+                frame_rate_den=gop.frame_rate_den,
+                packet_sizes=gop.packet_sizes,
+                packet_pts=gop.packet_pts,
+                packet_dts=gop.packet_dts,
+                packet_keyframes=gop.packet_keyframes,
+                duration_seconds=(
+                    duration_override
+                    if duration_override is not None
+                    else max(gop.end_time - gop.start_time, 0.0)
+                ),
             )
 
             # 上传语义 JSON（如果可用）
@@ -362,9 +560,9 @@ class VideoStorage:
         # 如果传入的是 SHA-256 hex（兼容旧代码），查索引转换为 IPFS CID
         ipfs_cid = cid
         if len(cid) == 64 and all(c in "0123456789abcdef" for c in cid):
-            looked_up = self._index.get_gop_cid(device_id, cid)
-            if looked_up:
-                ipfs_cid = looked_up
+            record = self.get_gop_record(device_id, sha256_hash=cid)
+            if record:
+                ipfs_cid = record["ipfs_cid"]
                 logger.debug(f"Resolved SHA-256 {cid[:8]}... → IPFS CID {ipfs_cid}")
             else:
                 raise FileNotFoundError(
@@ -400,12 +598,161 @@ class VideoStorage:
         Returns:
             GOP 信息列表，每项包含 ipfs_cid, sha256_hash, timestamp, byte_size
         """
-        results = self._index.query_gops(device_id, start_time, end_time)
+        results = [
+            self._normalize_gop_record(row)
+            for row in self._index.query_gops(device_id, start_time, end_time)
+        ]
         logger.info(
             f"Found {len(results)} GOPs for device {device_id} "
             f"in time range [{start_time}, {end_time}]"
         )
         return results
+
+    def get_gop_time_bounds(self) -> List[Dict[str, Any]]:
+        """返回每个设备的 GOP 时间范围摘要。"""
+        return self._index.get_gop_time_bounds()
+
+    def build_ts_segment(self, device_id: str, cid: str) -> bytes:
+        """按需将原始 GOP 重封装成可播放的 MPEG-TS 分片。"""
+        record = self.get_gop_record(device_id, ipfs_cid=cid)
+        if not self.has_playback_metadata(record):
+            raise ValueError(f"GOP {cid} lacks playback reconstruction metadata")
+
+        raw_bytes = self.download_gop(device_id, cid)
+        packet_sizes = record["packet_sizes"]
+        packet_pts = record["packet_pts"]
+        packet_dts = record["packet_dts"]
+        packet_keyframes = record.get("packet_keyframes") or [False] * len(packet_sizes)
+        if sum(packet_sizes) != len(raw_bytes):
+            raise ValueError(f"GOP {cid} packet size metadata does not match raw_bytes")
+
+        buffer = io.BytesIO()
+        output = av.open(buffer, mode="w", format="mpegts")
+        rate = None
+        if record.get("frame_rate_num") and record.get("frame_rate_den"):
+            rate = Fraction(record["frame_rate_num"], record["frame_rate_den"])
+        out_stream = output.add_stream(record["codec_name"], rate=rate)
+        if record.get("width"):
+            out_stream.width = record["width"]
+        if record.get("height"):
+            out_stream.height = record["height"]
+        if record.get("pix_fmt"):
+            out_stream.pix_fmt = record["pix_fmt"]
+        extradata_b64 = record.get("codec_extradata_b64")
+        if extradata_b64:
+            out_stream.codec_context.extradata = base64.b64decode(extradata_b64)
+
+        time_base = None
+        if record.get("time_base_num") and record.get("time_base_den"):
+            time_base = Fraction(record["time_base_num"], record["time_base_den"])
+
+        cursor = 0
+        try:
+            for size, pts, dts, is_keyframe in zip(packet_sizes, packet_pts, packet_dts, packet_keyframes):
+                chunk = raw_bytes[cursor:cursor + size]
+                cursor += size
+                packet = av.Packet(chunk)
+                packet.pts = pts
+                packet.dts = dts
+                if time_base is not None:
+                    packet.time_base = time_base
+                if is_keyframe:
+                    packet.is_keyframe = True
+                packet.stream = out_stream
+                output.mux(packet)
+        finally:
+            output.close()
+
+        return buffer.getvalue()
+
+    def build_ts_stream(self, device_id: str, cids: List[str]) -> bytes:
+        """将多个 GOP 顺序重封装为单一 MPEG-TS 导出文件。"""
+        if not cids:
+            raise ValueError("No GOP CIDs provided for TS export")
+
+        records = []
+        for cid in cids:
+            record = self.get_gop_record(device_id, ipfs_cid=cid)
+            if not self.has_playback_metadata(record):
+                raise ValueError(f"GOP {cid} lacks playback reconstruction metadata")
+            records.append(record)
+
+        first = records[0]
+        baseline = (
+            first.get("codec_name"),
+            first.get("codec_extradata_b64"),
+            first.get("width"),
+            first.get("height"),
+            first.get("pix_fmt"),
+            first.get("time_base_num"),
+            first.get("time_base_den"),
+            first.get("frame_rate_num"),
+            first.get("frame_rate_den"),
+        )
+        for record in records[1:]:
+            candidate = (
+                record.get("codec_name"),
+                record.get("codec_extradata_b64"),
+                record.get("width"),
+                record.get("height"),
+                record.get("pix_fmt"),
+                record.get("time_base_num"),
+                record.get("time_base_den"),
+                record.get("frame_rate_num"),
+                record.get("frame_rate_den"),
+            )
+            if candidate != baseline:
+                raise ValueError("Matched GOPs are not stream-compatible for TS export")
+
+        buffer = io.BytesIO()
+        output = av.open(buffer, mode="w", format="mpegts")
+        rate = None
+        if first.get("frame_rate_num") and first.get("frame_rate_den"):
+            rate = Fraction(first["frame_rate_num"], first["frame_rate_den"])
+        out_stream = output.add_stream(first["codec_name"], rate=rate)
+        if first.get("width"):
+            out_stream.width = first["width"]
+        if first.get("height"):
+            out_stream.height = first["height"]
+        if first.get("pix_fmt"):
+            out_stream.pix_fmt = first["pix_fmt"]
+        extradata_b64 = first.get("codec_extradata_b64")
+        if extradata_b64:
+            out_stream.codec_context.extradata = base64.b64decode(extradata_b64)
+
+        time_base = None
+        if first.get("time_base_num") and first.get("time_base_den"):
+            time_base = Fraction(first["time_base_num"], first["time_base_den"])
+
+        try:
+            for record in records:
+                raw_bytes = self.download_gop(device_id, record["ipfs_cid"])
+                packet_sizes = record["packet_sizes"]
+                packet_pts = record["packet_pts"]
+                packet_dts = record["packet_dts"]
+                packet_keyframes = record.get("packet_keyframes") or [False] * len(packet_sizes)
+                if sum(packet_sizes) != len(raw_bytes):
+                    raise ValueError(
+                        f"GOP {record['ipfs_cid']} packet size metadata does not match raw_bytes"
+                    )
+
+                cursor = 0
+                for size, pts, dts, is_keyframe in zip(packet_sizes, packet_pts, packet_dts, packet_keyframes):
+                    chunk = raw_bytes[cursor:cursor + size]
+                    cursor += size
+                    packet = av.Packet(chunk)
+                    packet.pts = pts
+                    packet.dts = dts
+                    if time_base is not None:
+                        packet.time_base = time_base
+                    if is_keyframe:
+                        packet.is_keyframe = True
+                    packet.stream = out_stream
+                    output.mux(packet)
+        finally:
+            output.close()
+
+        return buffer.getvalue()
 
     def upload_json(self, device_id: str, filename: str, data: dict) -> str:
         """

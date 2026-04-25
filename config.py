@@ -1,7 +1,8 @@
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 try:
     from dotenv import load_dotenv
@@ -78,6 +79,72 @@ def _env_str_list(name: str, default: List[str]) -> List[str]:
     return parsed if parsed else list(default)
 
 
+def _env_camera_configs(default_id: str, default_source: str) -> List[Dict[str, str]]:
+    raw = os.getenv("CAMERA_CONFIGS")
+    fallback = [{"device_id": default_id, "video_source": default_source}]
+
+    if raw is None or not raw.strip():
+        return fallback
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return fallback
+
+    if not isinstance(parsed, list):
+        return fallback
+
+    cameras: List[Dict[str, str]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+        device_id = str(item.get("device_id", "")).strip()
+        video_source = str(item.get("video_source", "")).strip()
+        if not device_id or not video_source:
+            continue
+        cameras.append({
+            "device_id": device_id,
+            "video_source": video_source,
+            "label": str(item.get("label", device_id)).strip() or device_id,
+            "is_primary": "true" if index == 0 else "false",
+        })
+
+    return cameras if cameras else fallback
+
+
+def _resolve_primary_camera_id(configured_camera_id: str, camera_configs: List[Dict[str, str]]) -> str:
+    """Resolve the primary camera/device id used by backend anchoring.
+
+    Prefer an explicitly configured camera that actually exists in CAMERA_CONFIGS.
+    If the legacy CAMERA_ID no longer matches any configured camera, promote the
+    first configured camera instead so device identity stays aligned with the UI.
+    """
+    if not camera_configs:
+        return configured_camera_id
+
+    device_ids = [camera.get("device_id", "").strip() for camera in camera_configs if camera.get("device_id", "").strip()]
+    if configured_camera_id in device_ids:
+        return configured_camera_id
+    return device_ids[0] if device_ids else configured_camera_id
+
+
+def _mark_primary_camera(camera_configs: List[Dict[str, str]], primary_camera_id: str) -> List[Dict[str, str]]:
+    marked: List[Dict[str, str]] = []
+    for camera in camera_configs:
+        item = dict(camera)
+        item["is_primary"] = "true" if item.get("device_id") == primary_camera_id else "false"
+        marked.append(item)
+    return marked
+
+
+def _resolve_primary_video_source(configured_video_source: str, camera_configs: List[Dict[str, str]], primary_camera_id: str) -> str:
+    """Resolve the stream used by the detection and anchoring pipeline."""
+    for camera in camera_configs:
+        if camera.get("device_id") == primary_camera_id and camera.get("video_source"):
+            return camera["video_source"]
+    return configured_video_source
+
+
 @dataclass(frozen=True)
 class Settings:
     fabric_samples_path: Path
@@ -99,6 +166,7 @@ class Settings:
     orderer_org_domain: str
     orderer_domain: str
     video_source: str
+    camera_configs: List[Dict[str, str]]
     model_candidates: List[str]
     detect_default_model: str
 
@@ -139,16 +207,27 @@ class Settings:
     semantic_confidence: float
     vif_version: str
     vif_sample_frames: int
+    local_ring_buffer_enabled: bool
+    local_ring_buffer_dir: Path
+    local_ring_buffer_retention_seconds: int
+    local_ring_buffer_segment_seconds: int
+    gop_build_queue_size: int
 
 
 def load_settings() -> Settings:
     default_fabric_samples = str(Path.home() / "projects" / "fabric-samples")
     default_evidence_dir = "evidences"
+    configured_camera_id = _env_str("CAMERA_ID", "cctv-kctmc-apple-01")
+    configured_video_source = _env_str("VIDEO_SOURCE", "https://cctv1.kctmc.nat.gov.tw/6e559e58/")
+    camera_configs = _env_camera_configs(configured_camera_id, configured_video_source)
+    primary_camera_id = _resolve_primary_camera_id(configured_camera_id, camera_configs)
+    primary_video_source = _resolve_primary_video_source(configured_video_source, camera_configs, primary_camera_id)
+    camera_configs = _mark_primary_camera(camera_configs, primary_camera_id)
 
     return Settings(
         fabric_samples_path=Path(_env_str("FABRIC_SAMPLES_PATH", default_fabric_samples)).expanduser().resolve(),
         evidence_dir=Path(_env_str("EVIDENCE_DIR", default_evidence_dir)).expanduser().resolve(),
-        camera_id=_env_str("CAMERA_ID", "cctv-kctmc-apple-01"),
+        camera_id=primary_camera_id,
         channel_name=_env_str("CHANNEL_NAME", "mychannel"),
         chaincode_name=_env_str("CHAINCODE_NAME", "evidence"),
         core_peer_tls_enabled=_env_str("CORE_PEER_TLS_ENABLED", "true"),
@@ -166,7 +245,8 @@ def load_settings() -> Settings:
         org3_domain=_env_str("ORG3_DOMAIN", "org3.example.com"),
         orderer_org_domain=_env_str("ORDERER_ORG_DOMAIN", "example.com"),
         orderer_domain=_env_str("ORDERER_DOMAIN", "orderer.example.com"),
-        video_source=_env_str("VIDEO_SOURCE", "https://cctv1.kctmc.nat.gov.tw/6e559e58/"),
+        video_source=primary_video_source,
+        camera_configs=camera_configs,
         model_candidates=_env_str_list("MODEL_CANDIDATES", ["yolo11n.pt", "yolo11m.pt", "yolo11x.pt"]),
         detect_default_model=_env_str("DETECT_MODEL", "yolo11n.pt"),
         aggregate_min_frames=_env_int("AGGREGATE_MIN_FRAMES", 3),
@@ -196,6 +276,11 @@ def load_settings() -> Settings:
         semantic_confidence=_env_float("SEMANTIC_CONFIDENCE", 0.5),
         vif_version=_env_str("VIF_VERSION", "v4"),
         vif_sample_frames=_env_int("VIF_SAMPLE_FRAMES", 1),
+        local_ring_buffer_enabled=_env_bool("LOCAL_RING_BUFFER_ENABLED", False),
+        local_ring_buffer_dir=Path(_env_str("LOCAL_RING_BUFFER_DIR", "data/ring_buffer")).expanduser().resolve(),
+        local_ring_buffer_retention_seconds=_env_int("LOCAL_RING_BUFFER_RETENTION_SECONDS", 3600),
+        local_ring_buffer_segment_seconds=_env_int("LOCAL_RING_BUFFER_SEGMENT_SECONDS", 1),
+        gop_build_queue_size=_env_int("GOP_BUILD_QUEUE_SIZE", 128),
     )
 
 

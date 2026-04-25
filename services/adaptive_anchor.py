@@ -11,7 +11,7 @@
 - full：光流运动分析 + 统计异常检测 + 规则引擎加权融合
 
 设计特点：
-- 滑动窗口中位数平滑（抗异常值）
+- 5 GOP 滑动窗口均值平滑（响应更灵敏）
 - 状态切换防抖（快升慢降）
 - 边缘设备友好（光流缩放至 320×240，无重依赖）
 """
@@ -22,7 +22,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from statistics import median
+from statistics import mean
 from typing import Dict, List, Optional
 
 import cv2
@@ -76,7 +76,7 @@ class AnchorDecision:
 
     包含 EIS 评分、平滑计数、活跃等级和上报决策：
     - eis_score: 事件重要性评分 (0.0~1.0)
-    - smoothed_count: 滑动窗口中位数
+    - smoothed_count: 滑动窗口平均目标数
     - level: 活跃等级 ("LOW", "MEDIUM", "HIGH")
     - report_interval_seconds: 上报间隔 (300, 60, 10)
     - should_report_now: 是否应立即上报
@@ -85,7 +85,7 @@ class AnchorDecision:
     - signal_breakdown: 各信号分量（仅 full 模式）
     """
     eis_score: float
-    smoothed_count: int
+    smoothed_count: float
     level: str
     report_interval_seconds: int
     should_report_now: bool
@@ -350,7 +350,7 @@ class AdaptiveAnchor:
     自适应锚点管理器
 
     根据场景活跃度动态调整上报频率：
-    - 使用滑动窗口中位数平滑目标计数
+    - 使用 5 GOP 滑动窗口平均数平滑目标计数
     - 快速升级（3 次确认）、缓慢降级（5 次确认）
     - 三级上报间隔：300s / 60s / 10s
 
@@ -368,7 +368,7 @@ class AdaptiveAnchor:
 
     def __init__(
         self,
-        window_size: int = 10,
+        window_size: int = 5,
         upgrade_confirm: int = 3,
         downgrade_confirm: int = 5,
         eis_mode: Optional[str] = None,
@@ -378,7 +378,7 @@ class AdaptiveAnchor:
         初始化自适应锚点管理器
 
         Args:
-            window_size: 滑动窗口大小（默认 10）
+            window_size: 滑动窗口大小（默认 5）
             upgrade_confirm: 升级所需确认次数（默认 3）
             downgrade_confirm: 降级所需确认次数（默认 5）
             eis_mode: EIS 模式 ("lite" 或 "full")，默认读取环境变量 EIS_MODE
@@ -399,6 +399,7 @@ class AdaptiveAnchor:
 
         # EIS 分数滑动窗口（用于平滑 full 模式的连续 EIS）
         self._eis_history: deque[float] = deque(maxlen=window_size)
+        self._latest_eis: float = 0.0
 
         # 状态管理
         self._current_level = "LOW"
@@ -431,12 +432,12 @@ class AdaptiveAnchor:
             f"eis_mode={self.eis_mode}, anchor_mode={self.anchor_mode}"
         )
 
-    def _calculate_eis(self, smoothed_count: int) -> float:
+    def _calculate_eis(self, smoothed_count: float) -> float:
         """
         计算事件重要性评分 (EIS) — lite 模式
 
         Args:
-            smoothed_count: 平滑后的目标计数
+            smoothed_count: 5 GOP 窗口平均目标数
 
         Returns:
             EIS 评分 (0.1, 0.5, 0.9)
@@ -567,13 +568,13 @@ class AdaptiveAnchor:
                 semantic, motion_features, anomaly_result,
             )
 
-            # 4. 滑动窗口平滑 EIS
+            # 4. 滑动窗口均值平滑 EIS
             self._eis_history.append(eis_score)
-            smoothed_eis = float(median(self._eis_history))
+            smoothed_eis = float(mean(self._eis_history))
 
             # 5. 也维护 count 历史（用于 smoothed_count 字段兼容）
             self._count_history.append(semantic.total_count)
-            smoothed_count = int(median(self._count_history))
+            smoothed_count = float(mean(self._count_history))
 
             # 6. 确定目标等级并防抖
             target_level = self._eis_to_level(smoothed_eis)
@@ -582,12 +583,12 @@ class AdaptiveAnchor:
             # 使用平滑后的 EIS
             final_eis = smoothed_eis
         else:
-            # --- Lite EIS 模式（原有逻辑） ---
+            # --- Lite EIS 模式 ---
             # 1. 添加到滑动窗口
             self._count_history.append(semantic.total_count)
 
-            # 2. 计算平滑计数（中位数）
-            smoothed_count = int(median(self._count_history))
+            # 2. 计算 5 GOP 窗口平均目标数
+            smoothed_count = float(mean(self._count_history))
 
             # 3. 计算 EIS 评分
             final_eis = self._calculate_eis(smoothed_count)
@@ -598,7 +599,12 @@ class AdaptiveAnchor:
             # 5. 更新等级（带防抖）
             self._update_level(target_level)
 
+            # 6. Lite 模式也维护 EIS 历史，供前端仪表盘显示
+            self._eis_history.append(final_eis)
+
         # --- 公共部分 ---
+        self._latest_eis = final_eis
+
         # 获取上报间隔
         report_interval = self._level_to_interval(self._current_level)
 

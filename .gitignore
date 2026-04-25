@@ -25,6 +25,25 @@ benchmarks/dataset_gen/
 benchmarks/results/
 benchmarks/manifest.json
 benchmarks/sample_videos/
+old/benchmarks/datasets/
+old/benchmarks/sample_videos/
+
+# Runtime databases and logs
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.log
+data/*.pid
+data/logs/
+data/ipfs_index/
+data/ring_buffer/
+data/uploads/
+
+# Local media artifacts
+*.mp4
+
+# macOS metadata
+.DS_Store
 
 # Go module configs if they get too large
 # but usually go.sum and go.mod are fine

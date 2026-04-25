@@ -165,7 +165,7 @@ def get_latest_block_number(env: Dict[str, str], channel: str) -> Optional[int]:
 def get_fabric_config():
     """Get Fabric configuration from settings."""
     return {
-        "fabric_samples_path": SETTINGS.fabric_samples_path,
+        "fabric_samples_path": str(SETTINGS.fabric_samples_path),
         "channel_name": SETTINGS.channel_name,
         "chaincode_name": SETTINGS.chaincode_name,
         "camera_id": SETTINGS.camera_id,

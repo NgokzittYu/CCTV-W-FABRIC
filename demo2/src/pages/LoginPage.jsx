@@ -1,28 +1,9 @@
-import { useState } from 'react';
-import { Shield, ShieldCheck, User, Lock, ChevronRight, Eye } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect } from 'react';
+import { Shield, Terminal, ArrowRight, Eye, KeyRound } from 'lucide-react';
 
 const roles = [
-  {
-    id: 'admin',
-    title: '管理方',
-    subtitle: '监控管理 · 视频存证 · 链上锚定',
-    icon: Shield,
-    color: 'var(--accent-green)',
-    dimColor: 'var(--accent-green-dim)',
-    username: 'admin',
-    password: 'admin123',
-  },
-  {
-    id: 'verifier',
-    title: '验证方',
-    subtitle: '证据验真 · 完整性校验 · 报告生成',
-    icon: ShieldCheck,
-    color: 'var(--accent-purple)',
-    dimColor: 'var(--accent-purple-dim)',
-    username: 'verifier',
-    password: 'verify123',
-  },
+  { id: 'admin', title: '管理终端', access: '节点控制与链上锚定', username: 'admin', password: 'admin123' },
+  { id: 'verifier', title: '验证终端', access: '证据核验与 VIF 报告', username: 'verifier', password: 'verify123' },
 ];
 
 export default function LoginPage({ onLogin }) {
@@ -30,153 +11,157 @@ export default function LoginPage({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
+  const [logs, setLogs] = useState(['控制平面已就绪，等待身份选择']);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    const bootSequence = [
+      'Fabric 读链连接正常',
+      'IPFS 仓库响应正常',
+      'VIF 检测服务已加载',
+      '等待用户身份授权',
+    ];
+    let delayMs = 0;
+    const timers = [];
+
+    bootSequence.forEach((log) => {
+      delayMs += 420;
+      timers.push(setTimeout(() => setLogs((prev) => [...prev, log]), delayMs));
+    });
+
+    return () => timers.forEach((timer) => clearTimeout(timer));
+  }, []);
 
   const handleSelectRole = (role) => {
     setSelectedRole(role);
     setUsername(role.username);
     setPassword(role.password);
-    setError('');
+    setLogs((prev) => [...prev, `已选择 ${role.title}`]);
   };
 
   const handleLogin = async (e) => {
     e.preventDefault();
     if (!selectedRole) {
-      setError('请选择登录角色');
+      setLogs((prev) => [...prev, '未选择终端身份']);
       return;
     }
     setIsLoading(true);
-    // Simulate authentication delay
-    await new Promise((r) => setTimeout(r, 600));
-    setIsLoading(false);
+    setLogs((prev) => [...prev, `正在校验 ${selectedRole.title} 凭据`]);
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    setLogs((prev) => [...prev, '凭据校验通过，正在载入控制台']);
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
     onLogin(selectedRole.id);
   };
 
   return (
-    <div className="login-page">
-      {/* Animated background particles */}
-      <div className="login-bg-particles">
-        {[...Array(6)].map((_, i) => (
-          <div key={i} className="particle" style={{ '--i': i }} />
-        ))}
-      </div>
+    <div className="login-shell">
+      <div className="scan-overlay" />
 
-      <motion.div
-        className="login-container"
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
-      >
-        {/* Logo */}
-        <div className="login-logo">
-          <div className="login-logo-icon">
-            <Shield size={28} />
+      <section className="tech-panel anim-enter login-frame">
+        <header className="login-frame__header">
+          <div className="login-frame__titleWrap">
+            <div className="login-frame__mark">
+              <Terminal size={28} />
+            </div>
+            <div>
+              <h1 className="login-frame__title">SECURELENS 监控系统</h1>
+            </div>
           </div>
-          <h1 className="login-title">SecureLens</h1>
-          <p className="login-subtitle">
-            基于边缘 AI 与联盟链的监控视频防篡改系统
-          </p>
-        </div>
 
-        {/* Role Selection */}
-        <div className="login-roles">
-          {roles.map((role) => {
-            const Icon = role.icon;
-            const isSelected = selectedRole?.id === role.id;
-            return (
-              <motion.button
-                key={role.id}
-                className={`role-card ${isSelected ? 'role-card--active' : ''}`}
-                onClick={() => handleSelectRole(role)}
-                whileTap={{ scale: 0.97 }}
-                style={{
-                  '--role-color': role.color,
-                  '--role-dim': role.dimColor,
-                }}
-              >
-                <div className="role-card-icon">
-                  <Icon size={22} />
-                </div>
-                <div className="role-card-text">
-                  <span className="role-card-title">{role.title}</span>
-                  <span className="role-card-sub">{role.subtitle}</span>
-                </div>
-                <ChevronRight size={16} className="role-card-arrow" />
-              </motion.button>
-            );
-          })}
-        </div>
+          <div className="login-frame__signals">
+            <div className="login-frame__signal">
+              <span>Fabric</span>
+              <strong>在线</strong>
+            </div>
+            <div className="login-frame__signal">
+              <span>IPFS</span>
+              <strong>可用</strong>
+            </div>
+            <div className="login-frame__signal">
+              <span>VIF</span>
+              <strong>已加载</strong>
+            </div>
+          </div>
+        </header>
 
-        {/* Login Form */}
-        <AnimatePresence>
-          {selectedRole && (
-            <motion.form
-              className="login-form"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.35, ease: [0.23, 1, 0.32, 1] }}
-              onSubmit={handleLogin}
-            >
-              <div className="login-field">
-                <User size={16} className="login-field-icon" />
-                <input
-                  type="text"
-                  placeholder="用户名"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  id="login-username"
-                />
+        <div className="login-frame__body">
+          <div className="login-panel login-panel--auth">
+            <div className="login-section">
+              <span className="dashboard-eyebrow">选择终端身份</span>
+              <div className="login-roleGrid">
+                {roles.map((role) => (
+                  <button
+                    key={role.id}
+                    type="button"
+                    onClick={() => handleSelectRole(role)}
+                    className={`login-roleCard${selectedRole?.id === role.id ? ' is-active' : ''}`}
+                  >
+                    <div className="login-roleCard__copy">
+                      <strong>{role.title}</strong>
+                      <span>{role.access}</span>
+                    </div>
+                    <Shield size={18} />
+                  </button>
+                ))}
               </div>
-              <div className="login-field">
-                <Lock size={16} className="login-field-icon" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="密码"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  id="login-password"
-                />
-                <button
-                  type="button"
-                  className="login-field-toggle"
-                  onClick={() => setShowPassword(!showPassword)}
-                >
-                  <Eye size={14} />
+            </div>
+
+            <div className={`login-section login-auth${selectedRole ? '' : ' is-disabled'}`}>
+              <span className="dashboard-eyebrow">凭据验证</span>
+              <form onSubmit={handleLogin} className="login-form">
+                <label className="login-field">
+                  <Terminal size={16} className="login-field__icon" />
+                  <input
+                    className="input-raw login-field__input"
+                    type="text"
+                    placeholder="环境账户"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                  />
+                </label>
+
+                <label className="login-field">
+                  <KeyRound size={16} className="login-field__icon" />
+                  <input
+                    className="input-raw login-field__input"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="安全密钥"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="login-field__toggle"
+                    onClick={() => setShowPassword(!showPassword)}
+                  >
+                    <Eye size={18} />
+                  </button>
+                </label>
+
+                <button type="submit" className="btn btn-primary login-submit" disabled={isLoading}>
+                  {isLoading ? '正在进入控制台' : '进入控制台'}
+                  <ArrowRight size={18} />
                 </button>
+              </form>
+            </div>
+          </div>
+
+          <aside className="login-panel login-panel--status">
+            <div className="login-statusFeed">
+              <span className="dashboard-eyebrow">系统状态</span>
+              <div className="terminal-block login-terminal">
+                {logs.map((log, index) => (
+                  <div key={`${log}-${index}`} className="terminal-line">
+                    {log}
+                  </div>
+                ))}
               </div>
-
-              {error && <p className="login-error">{error}</p>}
-
-              <button
-                type="submit"
-                className="login-submit"
-                disabled={isLoading}
-                style={{ '--role-color': selectedRole.color }}
-              >
-                {isLoading ? (
-                  <span className="login-spinner" />
-                ) : (
-                  <>登录</>
-                )}
-              </button>
-
-              <p className="login-hint">
-                演示模式：已预填账号密码，直接点击登录即可
-              </p>
-            </motion.form>
-          )}
-        </AnimatePresence>
-      </motion.div>
-
-      {/* Footer */}
-      <div className="login-footer">
-        <span className="font-display" style={{ fontWeight: 600, letterSpacing: '0.05em' }}>
-          SecureLens
-        </span>
-        {' '}— 中国大学生计算机设计大赛
-      </div>
+            </div>
+          </aside>
+        </div>
+      </section>
     </div>
   );
 }

@@ -8,17 +8,20 @@ For intra-only codecs (MJPEG) where every frame is a keyframe, packets are
 grouped into logical GOPs of a configurable size (default 25 frames).
 """
 import argparse
+import base64
 import hashlib
 import os
+import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import av
 import numpy as np
 
+from services.gop_timing import normalize_gop_bounds
 from services.perceptual_hash import compute_phash
 from services.semantic_fingerprint import SemanticExtractor, SemanticFingerprint
 
@@ -45,6 +48,71 @@ class GOPData:
     semantic_hash: Optional[str] = None  # semantic fingerprint hash
     semantic_fingerprint: Optional[SemanticFingerprint] = None  # full semantic data
     vif: Optional[str] = None        # multi-modal fusion fingerprint (VIF)
+    codec_name: Optional[str] = None
+    codec_extradata_b64: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    pix_fmt: Optional[str] = None
+    time_base_num: Optional[int] = None
+    time_base_den: Optional[int] = None
+    frame_rate_num: Optional[int] = None
+    frame_rate_den: Optional[int] = None
+    packet_sizes: Optional[List[int]] = None
+    packet_pts: Optional[List[Optional[int]]] = None
+    packet_dts: Optional[List[Optional[int]]] = None
+    packet_keyframes: Optional[List[bool]] = None
+
+
+@dataclass
+class PendingGOP:
+    """A lightweight GOP payload waiting for expensive fingerprint construction."""
+
+    session_seq: int
+    gop_id: int
+    raw_bytes: bytes
+    start_ts: float
+    end_ts: float
+    frame_count: int
+    keyframe_frame: np.ndarray
+    stream_metadata: Dict[str, Optional[object]]
+    packet_sizes: List[int]
+    packet_pts: List[Optional[int]]
+    packet_dts: List[Optional[int]]
+    packet_keyframes: List[bool]
+    queued_at: float
+
+
+_PREWARM_LOCK = threading.Lock()
+_PREWARM_DONE = False
+
+
+def prewarm_gop_processors():
+    """Warm up expensive fingerprinting components before live ingest begins."""
+    global _PREWARM_DONE
+    if _PREWARM_DONE:
+        return
+    with _PREWARM_LOCK:
+        if _PREWARM_DONE:
+            return
+        try:
+            from services.perceptual_hash import _get_deep_hasher
+
+            _get_deep_hasher()._load_model()
+        except Exception as e:
+            print(f"[GOP_SPLITTER] Warning: perceptual hasher prewarm failed: {e}")
+        try:
+            extractor = SemanticExtractor.get_instance()
+            extractor._load_model()
+        except Exception as e:
+            print(f"[GOP_SPLITTER] Warning: semantic extractor prewarm failed: {e}")
+        try:
+            from services.vif import VIFConfig, _PHASH_FEAT_DIM, _VIFLSHProjector
+
+            projector = _VIFLSHProjector.get_instance()
+            projector._get_projection_matrix(_PHASH_FEAT_DIM, VIFConfig().output_length)
+        except Exception as e:
+            print(f"[GOP_SPLITTER] Warning: VIF prewarm failed: {e}")
+        _PREWARM_DONE = True
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +156,41 @@ def _packet_ts(packet: av.Packet, stream: av.video.stream.VideoStream) -> float:
     return 0.0
 
 
+def _fraction_parts(value) -> tuple[Optional[int], Optional[int]]:
+    """Convert av Rational-like objects to (num, den)."""
+    if value is None:
+        return None, None
+    try:
+        return int(value.numerator), int(value.denominator)
+    except Exception:
+        return None, None
+
+
+def _extract_stream_metadata(stream: av.video.stream.VideoStream) -> Dict[str, Optional[object]]:
+    """Capture the minimum codec metadata needed to remux GOP packets later."""
+    codec_ctx = stream.codec_context
+    time_base_num, time_base_den = _fraction_parts(stream.time_base)
+    frame_rate_num, frame_rate_den = _fraction_parts(stream.average_rate or stream.base_rate)
+    pix_fmt = None
+    try:
+        pix_fmt = codec_ctx.format.name if codec_ctx.format is not None else None
+    except Exception:
+        pix_fmt = None
+
+    extradata = codec_ctx.extradata or b""
+    return {
+        "codec_name": codec_ctx.name,
+        "codec_extradata_b64": base64.b64encode(extradata).decode("ascii") if extradata else None,
+        "width": codec_ctx.width or None,
+        "height": codec_ctx.height or None,
+        "pix_fmt": pix_fmt,
+        "time_base_num": time_base_num,
+        "time_base_den": time_base_den,
+        "frame_rate_num": frame_rate_num,
+        "frame_rate_den": frame_rate_den,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internal: build a GOPData from accumulated state
 # ---------------------------------------------------------------------------
@@ -99,11 +202,26 @@ def _build_gop(
     end_ts: float,
     frame_count: int,
     keyframe_frame: np.ndarray,
+    stream_metadata: Optional[Dict[str, Optional[object]]] = None,
+    packet_sizes: Optional[List[int]] = None,
+    packet_pts: Optional[List[Optional[int]]] = None,
+    packet_dts: Optional[List[Optional[int]]] = None,
+    packet_keyframes: Optional[List[bool]] = None,
     extra_frames: Optional[List[np.ndarray]] = None,
 ) -> GOPData:
     raw = bytes(buf)
     sha256_hash = hashlib.sha256(raw).hexdigest()
     phash = compute_phash(keyframe_frame)
+    metadata = stream_metadata or {}
+    norm_start, norm_end, _ = normalize_gop_bounds(
+        start_ts,
+        end_ts,
+        packet_pts=packet_pts,
+        time_base_num=metadata.get("time_base_num"),
+        time_base_den=metadata.get("time_base_den"),
+        frame_rate_num=metadata.get("frame_rate_num"),
+        frame_rate_den=metadata.get("frame_rate_den"),
+    )
 
     # Compute semantic fingerprint
     semantic_fp = None
@@ -113,7 +231,7 @@ def _build_gop(
         semantic_fp = extractor.extract(
             keyframe_frame=keyframe_frame,
             gop_id=gop_id,
-            start_time=start_ts
+            start_time=norm_start
         )
         if semantic_fp:
             semantic_hash = semantic_fp.semantic_hash
@@ -139,14 +257,28 @@ def _build_gop(
         gop_id=gop_id,
         raw_bytes=raw,
         sha256_hash=sha256_hash,
-        start_time=start_ts,
-        end_time=end_ts,
+        start_time=norm_start,
+        end_time=norm_end,
         frame_count=frame_count,
         byte_size=len(raw),
         keyframe_frame=keyframe_frame,
         phash=phash,
         semantic_hash=semantic_hash,
+        semantic_fingerprint=semantic_fp,
         vif=vif_str,
+        codec_name=metadata.get("codec_name"),
+        codec_extradata_b64=metadata.get("codec_extradata_b64"),
+        width=metadata.get("width"),
+        height=metadata.get("height"),
+        pix_fmt=metadata.get("pix_fmt"),
+        time_base_num=metadata.get("time_base_num"),
+        time_base_den=metadata.get("time_base_den"),
+        frame_rate_num=metadata.get("frame_rate_num"),
+        frame_rate_den=metadata.get("frame_rate_den"),
+        packet_sizes=list(packet_sizes or []),
+        packet_pts=list(packet_pts or []),
+        packet_dts=list(packet_dts or []),
+        packet_keyframes=list(packet_keyframes or []),
     )
 
 
@@ -167,6 +299,7 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     container = av.open(video_path)
     video_stream = container.streams.video[0]
     intra_only = _is_intra_only(video_stream)
+    stream_metadata = _extract_stream_metadata(video_stream)
 
     if intra_only:
         print(f"[GOP_SPLITTER] Intra-only codec ({video_stream.codec_context.name}), "
@@ -187,6 +320,10 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
     pending_keyframe: Optional[np.ndarray] = None
     # 缓存当前 GOP 的非关键帧 packets，用于解码采样
     gop_packets: List[av.Packet] = []
+    packet_sizes: List[int] = []
+    packet_pts: List[Optional[int]] = []
+    packet_dts: List[Optional[int]] = []
+    packet_keyframes: List[bool] = []
 
     def _sample_extra_frames(packets: List[av.Packet], stream) -> List[np.ndarray]:
         """从缓存的 packets 中按顺序解码并确定性采样，返回 BGR 帧列表。
@@ -242,15 +379,30 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
                 start_ts = ts
 
             buf.extend(bytes(packet))
+            packet_sizes.append(packet.size)
+            packet_pts.append(packet.pts)
+            packet_dts.append(packet.dts)
+            packet_keyframes.append(bool(packet.is_keyframe))
             frame_count += 1
             end_ts = ts
 
             if frame_count >= mjpeg_gop_size:
-                gops.append(_build_gop(gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe))
+                gops.append(_build_gop(
+                    gop_id, buf, start_ts, end_ts, frame_count, pending_keyframe,
+                    stream_metadata=stream_metadata,
+                    packet_sizes=packet_sizes,
+                    packet_pts=packet_pts,
+                    packet_dts=packet_dts,
+                    packet_keyframes=packet_keyframes,
+                ))
                 gop_id += 1
                 buf = bytearray()
                 frame_count = 0
                 pending_keyframe = None
+                packet_sizes = []
+                packet_pts = []
+                packet_dts = []
+                packet_keyframes = []
         else:
             # H.264/H.265 mode: split on keyframe boundaries
             if packet.is_keyframe:
@@ -260,7 +412,13 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
                     extra = _sample_extra_frames(gop_packets, video_stream)
                     gops.append(_build_gop(
                         gop_id, buf, start_ts, end_ts, frame_count,
-                        pending_keyframe, extra_frames=extra
+                        pending_keyframe,
+                        stream_metadata=stream_metadata,
+                        packet_sizes=packet_sizes,
+                        packet_pts=packet_pts,
+                        packet_dts=packet_dts,
+                        packet_keyframes=packet_keyframes,
+                        extra_frames=extra,
                     ))
                     gop_id += 1
 
@@ -268,12 +426,20 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
                 new_keyframe = _decode_keyframe(packet, video_stream)
                 pending_keyframe = new_keyframe
                 buf = bytearray(bytes(packet))
+                packet_sizes = [packet.size]
+                packet_pts = [packet.pts]
+                packet_dts = [packet.dts]
+                packet_keyframes = [bool(packet.is_keyframe)]
                 frame_count = 1
                 start_ts = ts
                 end_ts = ts
                 gop_packets = []  # 重置 packet 缓存
             else:
                 buf.extend(bytes(packet))
+                packet_sizes.append(packet.size)
+                packet_pts.append(packet.pts)
+                packet_dts.append(packet.dts)
+                packet_keyframes.append(bool(packet.is_keyframe))
                 frame_count += 1
                 end_ts = ts
                 if need_extra:
@@ -284,7 +450,13 @@ def split_gops(video_path: str, mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE) ->
         extra = _sample_extra_frames(gop_packets, video_stream)
         gops.append(_build_gop(
             gop_id, buf, start_ts, end_ts, frame_count,
-            pending_keyframe, extra_frames=extra
+            pending_keyframe,
+            stream_metadata=stream_metadata,
+            packet_sizes=packet_sizes,
+            packet_pts=packet_pts,
+            packet_dts=packet_dts,
+            packet_keyframes=packet_keyframes,
+            extra_frames=extra,
         ))
 
     container.close()
@@ -318,32 +490,63 @@ class GOPSplitter:
         stream_url: str,
         on_gop: Callable[[GOPData], None],
         mjpeg_gop_size: int = DEFAULT_MJPEG_GOP_SIZE,
+        queue_size: int = 128,
+        ingest_mode: str = "direct",
     ):
         self.stream_url = stream_url
         self.on_gop = on_gop
         self.mjpeg_gop_size = mjpeg_gop_size
+        self.queue_size = max(1, int(queue_size))
+        self.ingest_mode = ingest_mode
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._ingest_thread: Optional[threading.Thread] = None
+        self._build_thread: Optional[threading.Thread] = None
+        self._build_queue: "queue.Queue[PendingGOP]" = queue.Queue(maxsize=self.queue_size)
         self._next_gop_id = 0
+        self._session_seq = 0
+        self._discarded_partial_gops = 0
+        self._reconnect_count = 0
+        self._last_valid_gop_at: Optional[float] = None
+        self._last_backpressure_log_at = 0.0
 
     # -- public API ---------------------------------------------------------
 
     def start(self):
         """Start the background splitter thread."""
-        if self._thread is not None and self._thread.is_alive():
+        if self._ingest_thread is not None and self._ingest_thread.is_alive():
             print("[GOP_SPLITTER] Already running")
             return
+        prewarm_gop_processors()
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        self._build_thread = threading.Thread(target=self._run_build_loop, daemon=True)
+        self._ingest_thread = threading.Thread(target=self._run_ingest_loop, daemon=True)
+        self._build_thread.start()
+        self._ingest_thread.start()
         print(f"[GOP_SPLITTER] Started for {self.stream_url}")
 
     def stop(self):
         """Signal the background thread to stop."""
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=10)
+        if self._ingest_thread is not None:
+            self._ingest_thread.join(timeout=10)
+        if self._build_thread is not None:
+            self._build_thread.join(timeout=10)
         print("[GOP_SPLITTER] Stopped")
+
+    def get_runtime_stats(self) -> Dict[str, Optional[Union[float, int, str]]]:
+        oldest_pending_age = None
+        with self._build_queue.mutex:
+            pending = list(self._build_queue.queue)
+        if pending:
+            oldest_pending_age = max(time.time() - pending[0].queued_at, 0.0)
+        return {
+            "splitter_queue_depth": self._build_queue.qsize(),
+            "oldest_pending_age_seconds": oldest_pending_age,
+            "discarded_partial_gops": self._discarded_partial_gops,
+            "reconnect_count": self._reconnect_count,
+            "last_valid_gop_at": self._last_valid_gop_at,
+            "ingest_mode": self.ingest_mode,
+        }
 
     # -- internals ----------------------------------------------------------
 
@@ -355,17 +558,113 @@ class GOPSplitter:
             options["rtsp_transport"] = "tcp"
         return av.open(url, options=options)
 
-    def _run(self):
-        """Main loop: connect -> demux -> emit GOPs -> reconnect on failure."""
+    def _run_ingest_loop(self):
+        """Main loop: connect -> demux -> enqueue pending GOPs -> reconnect on failure."""
         while not self._stop_event.is_set():
             try:
+                self._session_seq += 1
                 self._process_stream()
             except Exception as e:
                 print(f"[GOP_SPLITTER] Stream error: {e}")
             finally:
                 if not self._stop_event.is_set():
+                    self._reconnect_count += 1
                     print("[GOP_SPLITTER] Reconnecting in 3 seconds...")
                     self._stop_event.wait(timeout=3)
+
+    def _run_build_loop(self):
+        """Build heavyweight GOP fingerprints on a separate worker thread."""
+        while not self._stop_event.is_set() or not self._build_queue.empty():
+            try:
+                pending = self._build_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                gop = _build_gop(
+                    pending.gop_id,
+                    bytearray(pending.raw_bytes),
+                    pending.start_ts,
+                    pending.end_ts,
+                    pending.frame_count,
+                    pending.keyframe_frame,
+                    stream_metadata=pending.stream_metadata,
+                    packet_sizes=pending.packet_sizes,
+                    packet_pts=pending.packet_pts,
+                    packet_dts=pending.packet_dts,
+                    packet_keyframes=pending.packet_keyframes,
+                )
+                try:
+                    self.on_gop(gop)
+                except Exception as e:
+                    print(f"[GOP_SPLITTER] Callback error on GOP {gop.gop_id}: {e}")
+            finally:
+                self._build_queue.task_done()
+
+    def _is_valid_pending_gop(
+        self,
+        raw_bytes: bytes,
+        start_ts: float,
+        end_ts: float,
+        frame_count: int,
+        packet_pts: List[Optional[int]],
+    ) -> bool:
+        return (
+            bool(raw_bytes)
+            and frame_count > 1
+            and len(packet_pts) > 1
+            and end_ts > start_ts
+        )
+
+    def _enqueue_pending_gop(
+        self,
+        raw_bytes: bytes,
+        start_ts: float,
+        end_ts: float,
+        frame_count: int,
+        keyframe_frame: np.ndarray,
+        stream_metadata: Dict[str, Optional[object]],
+        packet_sizes: List[int],
+        packet_pts: List[Optional[int]],
+        packet_dts: List[Optional[int]],
+        packet_keyframes: List[bool],
+    ):
+        if not self._is_valid_pending_gop(raw_bytes, start_ts, end_ts, frame_count, packet_pts):
+            self._discarded_partial_gops += 1
+            print(
+                "[GOP_SPLITTER] Dropped partial GOP "
+                f"(frames={frame_count}, packets={len(packet_pts)}, start={start_ts:.3f}, end={end_ts:.3f})"
+            )
+            return
+
+        pending = PendingGOP(
+            session_seq=self._session_seq,
+            gop_id=self._next_gop_id,
+            raw_bytes=raw_bytes,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            frame_count=frame_count,
+            keyframe_frame=keyframe_frame,
+            stream_metadata=dict(stream_metadata),
+            packet_sizes=list(packet_sizes),
+            packet_pts=list(packet_pts),
+            packet_dts=list(packet_dts),
+            packet_keyframes=list(packet_keyframes),
+            queued_at=time.time(),
+        )
+        self._next_gop_id += 1
+        while not self._stop_event.is_set():
+            try:
+                self._build_queue.put(pending, timeout=0.5)
+                self._last_valid_gop_at = time.time()
+                return
+            except queue.Full:
+                now = time.time()
+                if (now - self._last_backpressure_log_at) >= 5:
+                    self._last_backpressure_log_at = now
+                    print(
+                        "[GOP_SPLITTER] Build queue backpressure: "
+                        f"depth={self._build_queue.qsize()}/{self.queue_size}"
+                    )
 
     def _process_stream(self):
         """Process one connection session until EOF or error."""
@@ -386,6 +685,11 @@ class GOPSplitter:
         start_ts = 0.0
         end_ts = 0.0
         pending_keyframe: Optional[np.ndarray] = None
+        stream_metadata = _extract_stream_metadata(video_stream)
+        packet_sizes: List[int] = []
+        packet_pts: List[Optional[int]] = []
+        packet_dts: List[Optional[int]] = []
+        packet_keyframes: List[bool] = []
 
         try:
             for packet in container.demux(video_stream):
@@ -404,55 +708,63 @@ class GOPSplitter:
                         start_ts = ts
 
                     buf.extend(bytes(packet))
+                    packet_sizes.append(packet.size)
+                    packet_pts.append(packet.pts)
+                    packet_dts.append(packet.dts)
+                    packet_keyframes.append(bool(packet.is_keyframe))
                     frame_count += 1
                     end_ts = ts
 
                     if frame_count >= self.mjpeg_gop_size:
-                        self._emit_gop(buf, start_ts, end_ts, frame_count, pending_keyframe)
+                        self._enqueue_pending_gop(
+                            bytes(buf), start_ts, end_ts, frame_count, pending_keyframe,
+                            stream_metadata, packet_sizes, packet_pts, packet_dts, packet_keyframes,
+                        )
                         buf = bytearray()
                         frame_count = 0
                         pending_keyframe = None
+                        packet_sizes = []
+                        packet_pts = []
+                        packet_dts = []
+                        packet_keyframes = []
                 else:
                     # H.264/H.265 mode: split on keyframe boundaries
                     if packet.is_keyframe:
                         new_keyframe = _decode_keyframe(packet, video_stream)
 
                         if buf and pending_keyframe is not None:
-                            self._emit_gop(buf, start_ts, end_ts, frame_count, pending_keyframe)
+                            self._enqueue_pending_gop(
+                                bytes(buf), start_ts, end_ts, frame_count, pending_keyframe,
+                                stream_metadata, packet_sizes, packet_pts, packet_dts, packet_keyframes,
+                            )
 
                         pending_keyframe = new_keyframe
                         buf = bytearray(bytes(packet))
+                        packet_sizes = [packet.size]
+                        packet_pts = [packet.pts]
+                        packet_dts = [packet.dts]
+                        packet_keyframes = [bool(packet.is_keyframe)]
                         frame_count = 1
                         start_ts = ts
                         end_ts = ts
                     else:
                         buf.extend(bytes(packet))
+                        packet_sizes.append(packet.size)
+                        packet_pts.append(packet.pts)
+                        packet_dts.append(packet.dts)
+                        packet_keyframes.append(bool(packet.is_keyframe))
                         frame_count += 1
                         end_ts = ts
 
             # Stream ended – emit final partial GOP
             if buf and pending_keyframe is not None:
-                self._emit_gop(buf, start_ts, end_ts, frame_count, pending_keyframe)
+                self._enqueue_pending_gop(
+                    bytes(buf), start_ts, end_ts, frame_count, pending_keyframe,
+                    stream_metadata, packet_sizes, packet_pts, packet_dts, packet_keyframes,
+                )
 
         finally:
             container.close()
-
-    def _emit_gop(
-        self,
-        buf: bytearray,
-        start_ts: float,
-        end_ts: float,
-        frame_count: int,
-        keyframe_frame: np.ndarray,
-    ):
-        """Build GOPData and invoke the callback."""
-        gop = _build_gop(self._next_gop_id, buf, start_ts, end_ts, frame_count, keyframe_frame)
-        self._next_gop_id += 1
-
-        try:
-            self.on_gop(gop)
-        except Exception as e:
-            print(f"[GOP_SPLITTER] Callback error on GOP {gop.gop_id}: {e}")
 
 
 # ---------------------------------------------------------------------------

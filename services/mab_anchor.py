@@ -68,6 +68,18 @@ def compute_reward(success: bool, cost: float = 0.0, latency: float = 0.0) -> fl
     return max(-1.0, min(1.0, reward))
 
 
+def estimate_resource_savings(interval: int) -> float:
+    """Estimate anchoring write reduction versus anchoring every GOP.
+
+    The metric is intentionally limited to expected chain-write count reduction:
+    interval=1 means no savings, interval=5 means one write per five GOPs and
+    therefore an estimated 80% reduction.
+    """
+    if interval <= 1:
+        return 0.0
+    return round((1.0 - (1.0 / interval)) * 100.0, 4)
+
+
 # ── 策略基类 ──────────────────────────────────────────────────────────
 
 class BanditStrategy(ABC):
@@ -351,12 +363,25 @@ class MABAnchorManager:
 
     def get_stats(self) -> dict:
         """获取 MAB 统计信息。"""
+        actual_anchor_rate = (
+            (self._anchor_count / self._total_decisions) * 100.0
+            if self._total_decisions > 0
+            else 0.0
+        )
+        actual_resource_savings = (
+            max(0.0, 100.0 - actual_anchor_rate)
+            if self._total_decisions > 0
+            else 0.0
+        )
         return {
             "mode": self.mode,
             "current_arm": self._current_arm,
             "current_interval": self.current_interval,
             "total_decisions": self._total_decisions,
             "anchor_count": self._anchor_count,
+            "estimated_resource_savings_percent": estimate_resource_savings(self.current_interval),
+            "actual_anchor_rate_percent": round(actual_anchor_rate, 4),
+            "actual_resource_savings_percent": round(actual_resource_savings, 4),
             "arm_stats": self._strategy.get_arm_stats(),
         }
 

@@ -1,43 +1,49 @@
 import {
-  LayoutDashboard, HardDrive, Video, AlertTriangle,
-  ShieldCheck, FileText, History, LogOut
+  Activity, Video, Blocks, AlertTriangle,
+  LogOut, TerminalSquare, Brain, Database, ShieldCheck, FileSearch
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const adminTabs = [
-  { id: 'overview', label: '监控总览', icon: LayoutDashboard },
-  { id: 'devices',  label: '设备管理', icon: HardDrive },
-  { id: 'archive',  label: '视频存证', icon: Video },
-  { id: 'alerts',   label: '告警中心', icon: AlertTriangle },
+  { id: 'dashboard', label: '仪表盘', icon: Activity },
+  { id: 'monitor', label: '实时监控', icon: Video },
+  { id: 'ipfs', label: 'IPFS 存储', icon: Database },
+  { id: 'anchor', label: '智能锚定', icon: Brain },
+  { id: 'ledger', label: '区块链', icon: Blocks },
+  { id: 'workorder', label: '告警与工单', icon: AlertTriangle },
 ];
 
 const verifierTabs = [
-  { id: 'verify',   label: '证据验真', icon: ShieldCheck },
-  { id: 'report',   label: '验真报告', icon: FileText },
-  { id: 'history',  label: '历史记录', icon: History },
+  { id: 'dashboard', label: '仪表盘', icon: Activity },
+  { id: 'video', label: '视频证据', icon: ShieldCheck },
+  { id: 'anchor', label: '智能锚定', icon: Brain },
+  { id: 'ledger', label: '区块链账本', icon: Blocks },
+  { id: 'ipfs', label: 'IPFS 存储', icon: Database },
+  { id: 'evidence', label: '证据浏览', icon: FileSearch },
 ];
 
 export default function Sidebar({ role, activeTab, onTabChange, onLogout }) {
   const tabs = role === 'admin' ? adminTabs : verifierTabs;
-  const roleLabel = role === 'admin' ? '管理后台' : '验证平台';
-  const roleColor = role === 'admin' ? 'var(--accent-green)' : 'var(--accent-purple)';
+  const roleLabel = role === 'admin' ? '管理终端' : '验证终端';
 
   return (
-    <aside className="sidebar">
-      {/* Brand */}
+    <aside className="sidebar-shell">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-logo" style={{ color: roleColor }}>
-          <ShieldCheck size={24} />
+        <div className="sidebar-brand__identity">
+          <div className="sidebar-brand__mark">
+            <TerminalSquare size={18} />
+          </div>
+          <div>
+            <div className="sidebar-brand__name">SECURELENS</div>
+          </div>
         </div>
-        <div className="sidebar-brand-text">
-          <span className="sidebar-brand-name">SecureLens</span>
-          <span className="sidebar-brand-role" style={{ color: roleColor }}>
-            {roleLabel}
-          </span>
+
+        <div className="sidebar-brand__meta">
+          <span className="sidebar-brand__metaLabel">当前角色</span>
+          <strong>{roleLabel}</strong>
         </div>
       </div>
 
-      {/* Navigation */}
       <nav className="sidebar-nav">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -45,33 +51,33 @@ export default function Sidebar({ role, activeTab, onTabChange, onLogout }) {
           return (
             <button
               key={tab.id}
-              className={`sidebar-item ${isActive ? 'sidebar-item--active' : ''}`}
+              type="button"
               onClick={() => onTabChange(tab.id)}
-              style={{ '--tab-color': roleColor }}
+              className={`sidebar-nav__item${isActive ? ' is-active' : ''}`}
             >
               {isActive && (
                 <motion.div
-                  className="sidebar-item-bg"
-                  layoutId="sidebar-active"
-                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-                  style={{ background: roleColor + '15' }}
+                  layoutId="sidebar-indicator"
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                  className="sidebar-nav__indicator"
                 />
               )}
-              <Icon size={18} />
-              <span>{tab.label}</span>
-              {isActive && (
-                <div className="sidebar-item-indicator" style={{ background: roleColor }} />
-              )}
+
+              <span className="sidebar-nav__icon">
+                <Icon size={17} />
+              </span>
+              <span className="sidebar-nav__content">
+                <span className="sidebar-nav__label">{tab.label}</span>
+              </span>
             </button>
           );
         })}
       </nav>
 
-      {/* Footer */}
       <div className="sidebar-footer">
-        <button className="sidebar-logout" onClick={onLogout}>
+        <button type="button" onClick={onLogout} className="sidebar-logout">
           <LogOut size={16} />
-          <span>退出登录</span>
+          <span>终止会话</span>
         </button>
       </div>
     </aside>

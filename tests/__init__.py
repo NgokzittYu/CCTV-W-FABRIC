@@ -1,1 +1,1 @@
-"""Tests package for SecureLens application."""
+"""Current SecureLens pytest suite."""

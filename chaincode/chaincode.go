@@ -55,6 +55,7 @@ type MerkleBatch struct {
 	CameraID            string   `json:"cameraId"`
 	EventCount          int      `json:"eventCount"`
 	EventIDs            []string `json:"eventIds"`
+	EventVifs           []string `json:"eventVifs"`
 	WindowStart         int64    `json:"windowStart"`
 	WindowEnd           int64    `json:"windowEnd"`
 	Timestamp           int64    `json:"timestamp"`
@@ -176,7 +177,7 @@ func (s *EvidenceSmartContract) requireMSP(ctx contractapi.TransactionContextInt
 	return "", fmt.Errorf("permission denied for MSP %s, allowed: %s", mspID, strings.Join(sorted, ","))
 }
 
-func canonicalBatchPayloadHash(batchID string, cameraID string, merkleRoot string, windowStart int64, windowEnd int64, eventIDs []string, eventHashes []string) (string, error) {
+func canonicalBatchPayloadHash(batchID string, cameraID string, merkleRoot string, windowStart int64, windowEnd int64, eventIDs []string, eventHashes []string, eventVifs []string) (string, error) {
 	payload := map[string]interface{}{
 		"batchId":     batchID,
 		"cameraId":    cameraID,
@@ -185,6 +186,7 @@ func canonicalBatchPayloadHash(batchID string, cameraID string, merkleRoot strin
 		"windowEnd":   windowEnd,
 		"eventIds":    eventIDs,
 		"eventHashes": eventHashes,
+		"eventVifs":   eventVifs,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -318,6 +320,7 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 	windowEnd int64,
 	eventIDsJSON string,
 	eventHashesJSON string,
+	eventVifsJSON string,
 	deviceCertPEM string,
 	signatureB64 string,
 	payloadHashHex string,
@@ -352,6 +355,14 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 	}
 	if len(eventIDs) != len(eventHashes) {
 		return fmt.Errorf("eventIDs/eventHashes length mismatch")
+	}
+
+	var eventVifs []string
+	if err := json.Unmarshal([]byte(eventVifsJSON), &eventVifs); err != nil {
+		return fmt.Errorf("invalid eventVifs JSON: %v", err)
+	}
+	if len(eventVifs) != len(eventIDs) {
+		return fmt.Errorf("eventVifs/eventIDs length mismatch")
 	}
 
 	seen := map[string]bool{}
@@ -404,6 +415,7 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 		windowEnd,
 		normalizedEventIDs,
 		normalizedEventHashes,
+		eventVifs,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to build payload hash: %v", err)
@@ -428,6 +440,7 @@ func (s *EvidenceSmartContract) CreateEvidenceBatch(
 		CameraID:            cameraID,
 		EventCount:          len(normalizedEventIDs),
 		EventIDs:            normalizedEventIDs,
+		EventVifs:           eventVifs,
 		WindowStart:         windowStart,
 		WindowEnd:           windowEnd,
 		Timestamp:           now,

@@ -1,0 +1,219 @@
+[
+  {
+    "sample_id": "intact_same_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "demo/static/samples/fearless.mp4",
+    "expected_class": "INTACT",
+    "transform_type": "none",
+    "transform_params": {},
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "intact_copy_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_copy.mp4",
+    "expected_class": "INTACT",
+    "transform_type": "byte_copy",
+    "transform_params": {},
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_crf18_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_crf18.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "crf",
+    "transform_params": {
+      "crf_value": 18
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_crf23_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_crf23.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "crf",
+    "transform_params": {
+      "crf_value": 23
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_crf28_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_crf28.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "crf",
+    "transform_params": {
+      "crf_value": 28
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_crf32_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_crf32.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "crf",
+    "transform_params": {
+      "crf_value": 32
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_crf35_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_crf35.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "crf",
+    "transform_params": {
+      "crf_value": 35
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_res720p_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_res720p.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "resolution",
+    "transform_params": {
+      "resolution": "720p"
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_res480p_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_res480p.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "resolution",
+    "transform_params": {
+      "resolution": "480p"
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "re_codec_libx265_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/legitimate/fearless_codeclibx265.mp4",
+    "expected_class": "RE_ENCODED",
+    "transform_type": "codec",
+    "transform_params": {
+      "codec": "libx265"
+    },
+    "attack_position": null,
+    "attack_length": null,
+    "replacement_source_type": null
+  },
+  {
+    "sample_id": "tamp_homo_k1_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k1.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 1
+    },
+    "attack_position": 5.0,
+    "attack_length": 1,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k2_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k2.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 2
+    },
+    "attack_position": 5.0,
+    "attack_length": 2,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k3_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k3.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 3
+    },
+    "attack_position": 5.0,
+    "attack_length": 3,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k5_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k5.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 5
+    },
+    "attack_position": 5.0,
+    "attack_length": 5,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k8_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k8.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 8
+    },
+    "attack_position": 5.0,
+    "attack_length": 8,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k12_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k12.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 12
+    },
+    "attack_position": 5.0,
+    "attack_length": 12,
+    "replacement_source_type": "homogeneous"
+  },
+  {
+    "sample_id": "tamp_homo_k15_fearless",
+    "source_video": "demo/static/samples/fearless.mp4",
+    "variant_path": "benchmarks/datasets/attacks/fearless_homo_k15.mp4",
+    "expected_class": "TAMPERED",
+    "transform_type": "frame_replacement",
+    "transform_params": {
+      "k": 15
+    },
+    "attack_position": 5.0,
+    "attack_length": 15,
+    "replacement_source_type": "homogeneous"
+  }
+]
