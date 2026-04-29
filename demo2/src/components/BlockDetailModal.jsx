@@ -24,11 +24,25 @@ function CopyField({ value }) {
   );
 }
 
+function FingerprintValue({ value }) {
+  if (!value) return '—';
+
+  return String(value)
+    .match(/.{1,8}/g)
+    .map((chunk, index) => (
+      <span key={`${chunk}-${index}`} className="block-detail-fingerprint__chunk">
+        {chunk}
+      </span>
+    ));
+}
+
 function FingerprintField({ label, value, kind }) {
   return (
     <div className={`block-detail-fingerprint block-detail-fingerprint--${kind}`}>
       <span className="block-detail-fingerprint__label">{label}</span>
-      <div className="block-detail-fingerprint__value">{value || '—'}</div>
+      <div className="block-detail-fingerprint__value" title={value || ''}>
+        <FingerprintValue value={value} />
+      </div>
     </div>
   );
 }

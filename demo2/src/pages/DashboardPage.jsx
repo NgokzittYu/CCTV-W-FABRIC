@@ -125,10 +125,6 @@ function PriorityModule({ card, reads }) {
         系统正在持续记录安全信息，并对视频内容执行 HASH 与 VIF 双重校验，
         用于后续验证证据是否发生篡改。
       </p>
-      <p className="dashboard-priorityModule__subdetail">
-        每次关键写入都会保留链上凭证与时间记录，便于在复核阶段快速证明内容完整性。
-      </p>
-
       <div className="dashboard-priorityModule__reads">
         {reads.map((read) => (
           <div key={read.label} className="dashboard-priorityModule__read">
@@ -295,12 +291,6 @@ export default function DashboardPage() {
 
     if (health?.fabric?.block_height != null) {
       fragments.push(`链上高度位于 #${formatNumber(health.fabric.block_height)}`);
-    }
-
-    if ((health?.gop_anchor?.pending_gops || 0) > 0) {
-      fragments.push(`仍有 ${formatNumber(health.gop_anchor.pending_gops)} 个 GOP 待处理`);
-    } else {
-      fragments.push('当前没有待处理 GOP');
     }
 
     return `${fragments.join('，')}。`;

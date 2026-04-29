@@ -485,9 +485,6 @@ function VerifyTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div className="tech-panel" style={{ padding: '24px' }}>
         <h3 style={{ margin: '0 0 16px', color: 'var(--nv-green)', fontSize: '1rem' }}>[ 三态完整性验证 ]</h3>
-        <div style={{ marginBottom: '16px', color: 'var(--text-muted)', fontSize: '0.82rem', lineHeight: 1.7, textWrap: 'pretty' }}>
-          直接上传从管理端 IPFS 存储页导出的 `TS` 样本，或经过“一键篡改”子页生成后的篡改版样本。系统会先校验文件名协议，再自动定位设备和画面时间段，进入闭环验证。
-        </div>
         {selectedExportInfo ? (
           <div className="tech-panel" style={{ padding: '14px 16px', marginBottom: '16px', border: '1px solid var(--border-subtle)', background: 'rgba(118, 185, 0, 0.04)' }}>
             <div style={{ color: 'var(--nv-green)', fontFamily: 'var(--font-heading)', fontSize: '0.84rem', marginBottom: '8px' }}>已识别样本协议</div>

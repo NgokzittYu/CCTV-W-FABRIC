@@ -11,7 +11,7 @@ export default function LoginPage({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [logs, setLogs] = useState(['控制平面已就绪，等待身份选择']);
+  const [logs, setLogs] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -19,6 +19,7 @@ export default function LoginPage({ onLogin }) {
       'Fabric 读链连接正常',
       'IPFS 仓库响应正常',
       'VIF 检测服务已加载',
+      'SECURELENS 监控系统已加载完毕，等待身份选择',
       '等待用户身份授权',
     ];
     let delayMs = 0;

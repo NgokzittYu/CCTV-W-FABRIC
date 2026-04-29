@@ -1,6 +1,6 @@
 import {
   Activity, Video, Blocks, AlertTriangle,
-  LogOut, TerminalSquare, Brain, Database, ShieldCheck, FileSearch
+  LogOut, TerminalSquare, Brain, Database, ShieldCheck, FileSearch, Sun, Moon
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -17,14 +17,15 @@ const verifierTabs = [
   { id: 'dashboard', label: '仪表盘', icon: Activity },
   { id: 'video', label: '视频证据', icon: ShieldCheck },
   { id: 'anchor', label: '智能锚定', icon: Brain },
-  { id: 'ledger', label: '区块链账本', icon: Blocks },
+  { id: 'ledger', label: '区块链', icon: Blocks },
   { id: 'ipfs', label: 'IPFS 存储', icon: Database },
   { id: 'evidence', label: '证据浏览', icon: FileSearch },
 ];
 
-export default function Sidebar({ role, activeTab, onTabChange, onLogout }) {
+export default function Sidebar({ role, activeTab, onTabChange, onLogout, theme = 'dark', onThemeToggle }) {
   const tabs = role === 'admin' ? adminTabs : verifierTabs;
   const roleLabel = role === 'admin' ? '管理终端' : '验证终端';
+  const isDark = theme === 'dark';
 
   return (
     <aside className="sidebar-shell">
@@ -40,7 +41,9 @@ export default function Sidebar({ role, activeTab, onTabChange, onLogout }) {
 
         <div className="sidebar-brand__meta">
           <span className="sidebar-brand__metaLabel">当前角色</span>
-          <strong>{roleLabel}</strong>
+          <div className="sidebar-brand__metaRow">
+            <strong>{roleLabel}</strong>
+          </div>
         </div>
       </div>
 
@@ -75,10 +78,22 @@ export default function Sidebar({ role, activeTab, onTabChange, onLogout }) {
       </nav>
 
       <div className="sidebar-footer">
-        <button type="button" onClick={onLogout} className="sidebar-logout">
-          <LogOut size={16} />
-          <span>终止会话</span>
-        </button>
+        <div className="sidebar-footer__actions">
+          <button type="button" onClick={onLogout} className="sidebar-logout">
+            <LogOut size={16} />
+            <span>退出</span>
+          </button>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={onThemeToggle}
+            aria-label={isDark ? '切换为浅色模式' : '切换为深色模式'}
+            title={isDark ? '切换为浅色模式' : '切换为深色模式'}
+          >
+            <Sun size={17} className={`theme-toggle__icon${isDark ? '' : ' is-active'}`} aria-hidden="true" />
+            <Moon size={17} className={`theme-toggle__icon${isDark ? ' is-active' : ''}`} aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </aside>
   );

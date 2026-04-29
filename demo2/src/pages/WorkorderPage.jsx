@@ -1,17 +1,189 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   AlertTriangle, Plus, Send, CheckCircle, XCircle,
-  ClipboardList, Clock, Search, FileText
+  Search, FileText, Hash, UserRound, CalendarClock,
+  ClipboardCheck, Paperclip, MessageSquare
 } from 'lucide-react';
 import {
-  getOverdueWorkorders, createWorkorder, getWorkorder,
+  createWorkorder, getWorkorder,
   submitRectification, confirmRectification, exportAuditTrail
 } from '../services/api';
 
+const statusMeta = {
+  OPEN: { label: '待整改', color: 'var(--status-warn)', bg: 'var(--status-warn-dim)' },
+  SUBMITTED: { label: '待确认', color: 'var(--status-info)', bg: 'var(--status-info-dim)' },
+  CONFIRMED: { label: '已确认', color: 'var(--nv-green)', bg: 'var(--nv-green-dim)' },
+  REJECTED: { label: '已驳回', color: 'var(--status-err)', bg: 'var(--status-err-dim)' },
+};
+
+function formatTime(value) {
+  if (!value) return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1000000000) return `${value}`;
+  return new Date(numeric * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatDeadline(value) {
+  if (!value) return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return `${value}`;
+  if (numeric < 1000000000) return `${numeric} 小时`;
+  return formatTime(numeric);
+}
+
+function DetailItem({ label, value, mono = false }) {
+  return (
+    <div style={{
+      minWidth: 0,
+      padding: '12px 14px',
+      border: '1px solid var(--border-subtle)',
+      background: 'rgba(255, 255, 255, 0.45)',
+    }}>
+      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '6px' }}>{label}</div>
+      <div style={{
+        color: 'var(--text-pure)',
+        fontFamily: mono ? 'var(--font-data)' : 'inherit',
+        fontSize: mono ? '0.78rem' : '0.86rem',
+        wordBreak: 'break-all',
+      }}>
+        {value || '—'}
+      </div>
+    </div>
+  );
+}
+
+function WorkorderResult({ data }) {
+  if (data.error) {
+    return (
+      <div style={{
+        marginTop: '16px',
+        padding: '14px 16px',
+        border: '1px solid var(--status-err)',
+        background: 'var(--status-err-dim)',
+        color: 'var(--status-err)',
+        fontSize: '0.84rem',
+      }}>
+        查询失败：{data.error}
+      </div>
+    );
+  }
+
+  const meta = statusMeta[data.status] || { label: data.status || '未知', color: 'var(--text-muted)', bg: 'rgba(148, 163, 184, 0.12)' };
+  const history = Array.isArray(data.history) ? data.history : [];
+  const attachments = Array.isArray(data.attachments) ? data.attachments : [];
+
+  return (
+    <div style={{
+      marginTop: '16px',
+      border: '1px solid var(--border-subtle)',
+      background: 'var(--bg-pure)',
+    }}>
+      <div style={{
+        padding: '16px 18px',
+        borderBottom: '1px solid var(--border-subtle)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '14px',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '6px' }}>
+            <Hash size={13} /> 工单编号
+          </div>
+          <div style={{ color: 'var(--text-pure)', fontFamily: 'var(--font-data)', fontSize: '1rem', wordBreak: 'break-all' }}>
+            {data.id || '—'}
+          </div>
+        </div>
+        <span style={{
+          padding: '7px 12px',
+          border: `1px solid ${meta.color}`,
+          background: meta.bg,
+          color: meta.color,
+          fontSize: '0.76rem',
+          fontWeight: 700,
+        }}>
+          {meta.label}
+        </span>
+      </div>
+
+      <div style={{ padding: '18px', display: 'grid', gap: '18px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+          <DetailItem label="关联批次" value={data.batchId} mono />
+          <DetailItem label="创建组织" value={data.createdBy} />
+          <DetailItem label="责任组织" value={data.assignedTo} />
+          <DetailItem label="整改期限" value={formatDeadline(data.deadline)} />
+          <DetailItem label="创建时间" value={formatTime(data.createdAt)} />
+          <DetailItem label="更新时间" value={formatTime(data.updatedAt)} />
+        </div>
+
+        <section style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+          <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 10px', color: 'var(--nv-green)' }}>
+            <ClipboardCheck size={16} /> 工单流转
+          </h4>
+          {history.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>暂无流转记录</div>
+          ) : (
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {history.map((item, index) => (
+                <div key={`${item.at}-${index}`} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '110px minmax(120px, 1fr) minmax(160px, 2fr)',
+                  gap: '12px',
+                  alignItems: 'start',
+                  padding: '12px 14px',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'rgba(255, 255, 255, 0.38)',
+                  fontSize: '0.8rem',
+                }}>
+                  <div style={{ color: 'var(--nv-green)', fontWeight: 700 }}>{item.action || 'UPDATE'}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><UserRound size={12} /> {item.byMsp || item.byMSP || '—'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}><CalendarClock size={12} /> {formatTime(item.at)}</div>
+                  </div>
+                  <div style={{ color: 'var(--text-pure)', wordBreak: 'break-word' }}>
+                    {item.comment || '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '14px' }}>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 10px', color: 'var(--nv-green)' }}>
+              <Paperclip size={16} /> 附件
+            </h4>
+            {attachments.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>暂无附件</div>
+            ) : (
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {attachments.map((item, index) => (
+                  <div key={`${item}-${index}`} style={{ color: 'var(--status-info)', fontFamily: 'var(--font-data)', fontSize: '0.75rem', wordBreak: 'break-all' }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '14px' }}>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 10px', color: 'var(--nv-green)' }}>
+              <MessageSquare size={16} /> 最近备注
+            </h4>
+            <div style={{ color: 'var(--text-pure)', fontSize: '0.85rem', lineHeight: 1.7 }}>
+              {history[history.length - 1]?.comment || '—'}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkorderPage() {
-  const [tab, setTab] = useState('list'); // 'list' | 'create' | 'query' | 'submit' | 'confirm'
-  const [overdueList, setOverdueList] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState('query'); // 'query' | 'create' | 'submit' | 'confirm' | 'audit'
   const [result, setResult] = useState(null);
 
   // Forms
@@ -22,16 +194,6 @@ export default function WorkorderPage() {
   const [confirmForm, setConfirmForm] = useState({ orderId: '', approved: true, comments: '' });
   const [auditBatchId, setAuditBatchId] = useState('');
   const [auditData, setAuditData] = useState(null);
-
-  useEffect(() => {
-    if (tab === 'list') {
-      setLoading(true);
-      getOverdueWorkorders()
-        .then((d) => setOverdueList(d.workorders || d.orders || []))
-        .catch(() => setOverdueList([]))
-        .finally(() => setLoading(false));
-    }
-  }, [tab]);
 
   const handleCreate = async () => {
     setResult(null);
@@ -89,9 +251,8 @@ export default function WorkorderPage() {
   };
 
   const tabs = [
-    { id: 'list', label: '逾期工单', icon: ClipboardList },
-    { id: 'create', label: '创建工单', icon: Plus },
     { id: 'query', label: '查询工单', icon: Search },
+    { id: 'create', label: '创建工单', icon: Plus },
     { id: 'submit', label: '提交整改', icon: Send },
     { id: 'confirm', label: '确认整改', icon: CheckCircle },
     { id: 'audit', label: '审计导出', icon: FileText },
@@ -124,34 +285,6 @@ export default function WorkorderPage() {
       </div>
 
       <div style={{ marginTop: '16px' }}>
-        {/* Overdue List */}
-        {tab === 'list' && (
-          <div className="tech-panel">
-            <h3 style={{ marginBottom: '16px', color: 'var(--status-warn)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Clock size={18} /> 逾期工单列表
-            </h3>
-            {loading ? (
-              <div className="terminal-block">正在拉取逾期工单...</div>
-            ) : overdueList.length === 0 ? (
-              <div className="terminal-block" style={{ color: 'var(--text-muted)' }}>[空] // 暂无逾期工单</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {overdueList.map((wo, i) => (
-                  <div key={i} style={{
-                    padding: '12px 16px', background: 'var(--bg-pure)', border: '1px solid var(--border-subtle)',
-                    display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.8rem',
-                  }}>
-                    <AlertTriangle size={14} color="var(--status-warn)" />
-                    <span style={{ fontWeight: 700 }}>{wo.orderId || wo.order_id || `工单 ${i + 1}`}</span>
-                    <span style={{ color: 'var(--text-muted)', flex: 1 }}>{wo.description || ''}</span>
-                    <span className="tag tag-warn">{wo.status || '逾期'}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Create Workorder */}
         {tab === 'create' && (
           <div className="tech-panel">
@@ -181,14 +314,16 @@ export default function WorkorderPage() {
             <h3 style={{ marginBottom: '16px', color: 'var(--nv-green)' }}>查询工单</h3>
             <div style={{ display: 'flex', gap: '8px', maxWidth: '500px' }}>
               <input className="input-raw" value={queryId} onChange={(e) => setQueryId(e.target.value)} placeholder="输入工单 ID" />
-              <button className="btn btn-primary" onClick={handleQuery}><Search size={14} /> 查询</button>
+              <button
+                className="btn btn-primary"
+                onClick={handleQuery}
+                style={{ minWidth: '96px', whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                <Search size={14} /> 查询
+              </button>
             </div>
             {queryResult && (
-              <div style={{ marginTop: '16px', padding: '16px', background: 'var(--bg-pure)', border: '1px solid var(--border-subtle)' }}>
-                <pre style={{ fontFamily: 'var(--font-data)', fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
-                  {JSON.stringify(queryResult, null, 2)}
-                </pre>
-              </div>
+              <WorkorderResult data={queryResult} />
             )}
           </div>
         )}

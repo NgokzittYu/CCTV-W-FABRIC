@@ -23,8 +23,7 @@ function formatChainDateTime(timestamp) {
 }
 
 function formatRoot(value) {
-  if (!value) return '—';
-  return value.length > 18 ? `${value.slice(0, 18)}...` : value;
+  return value || '—';
 }
 
 function formatTxId(value) {
@@ -87,7 +86,7 @@ export default function RecentBlocksRail({ blocks = [], mode = 'compact', onSele
             <>
               <div className="recent-blocks__root">
                 <span>Merkle Root</span>
-                <strong>{formatRoot(block.merkle_root)}</strong>
+                <strong title={block.merkle_root || undefined}>{formatRoot(block.merkle_root)}</strong>
               </div>
               <div className="recent-blocks__meta">
                 <span>

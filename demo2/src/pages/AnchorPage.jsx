@@ -30,18 +30,17 @@ const ARM_META = [
 ];
 
 const panelStyle = {
-  background:
-    'linear-gradient(180deg, rgba(18,22,18,0.98), rgba(7,8,9,0.99))',
-  border: '1px solid rgba(255,255,255,0.08)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.045), 0 18px 50px rgba(0,0,0,0.34)',
+  background: 'var(--anchor-panel-bg)',
+  border: '1px solid var(--anchor-panel-border)',
+  boxShadow: 'var(--anchor-panel-shadow)',
   position: 'relative',
   overflow: 'hidden',
 };
 
 const microPanelStyle = {
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012))',
-  border: '1px solid rgba(255,255,255,0.075)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.035)',
+  background: 'var(--anchor-micro-bg)',
+  border: '1px solid var(--anchor-micro-border)',
+  boxShadow: 'var(--anchor-micro-shadow)',
 };
 
 function clamp(value, min = 0, max = 1) {
@@ -100,8 +99,8 @@ function EISDial({ level, currentEIS }) {
           }}
         />
         <svg viewBox="0 0 120 120" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-          <circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="18" />
-          <circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="8" />
+          <circle cx="60" cy="60" r="50" fill="none" stroke="var(--anchor-dial-track-wide)" strokeWidth="18" />
+          <circle cx="60" cy="60" r="50" fill="none" stroke="var(--anchor-dial-track)" strokeWidth="8" />
           <circle
             className="eis-dial-ring"
             cx="60"
@@ -172,7 +171,7 @@ function DecisionLink({ stats, accent, activeArm, currentInterval }) {
           return (
             <div key={node.label} style={{ position: 'relative', minWidth: 0 }}>
               {index < nodes.length - 1 && (
-                <div style={{ position: 'absolute', left: '50%', bottom: '-11px', width: '1px', height: '11px', background: `linear-gradient(180deg, ${accent}, rgba(255,255,255,0.08))`, transform: 'translateX(-50%)', zIndex: 2 }} />
+                <div style={{ position: 'absolute', left: '50%', bottom: '-11px', width: '1px', height: '11px', background: `linear-gradient(180deg, ${accent}, var(--anchor-connector-fade))`, transform: 'translateX(-50%)', zIndex: 2 }} />
               )}
               <div
                 className={isActiveNode ? 'anchor-decisionNode anchor-decisionNode--active' : 'anchor-decisionNode'}
@@ -180,8 +179,8 @@ function DecisionLink({ stats, accent, activeArm, currentInterval }) {
                   '--decision-accent': accent,
                   minHeight: isActiveNode ? '104px' : '78px',
                   padding: isActiveNode ? '16px 18px' : '12px 14px',
-                  background: isActiveNode ? `linear-gradient(180deg, ${accent}1f, rgba(255,255,255,0.02))` : 'rgba(0,0,0,0.22)',
-                  border: isActiveNode ? `1px solid ${accent}78` : '1px solid rgba(255,255,255,0.075)',
+                  background: isActiveNode ? `linear-gradient(180deg, ${accent}1f, var(--anchor-node-active-tail))` : 'var(--anchor-node-bg)',
+                  border: isActiveNode ? `1px solid ${accent}78` : '1px solid var(--anchor-node-border)',
                   boxShadow: isActiveNode ? `0 0 0 1px ${accent}18 inset, 0 18px 34px ${accent}10` : 'none',
                   display: 'grid',
                   gridTemplateColumns: '1fr',
@@ -246,7 +245,7 @@ function OutputPanel({ stats, activeArm, currentInterval, savingPercent, anchorR
 
 function CompactMetric({ label, value, tone }) {
   return (
-    <div style={{ padding: '12px', minHeight: '76px', background: 'rgba(0,0,0,0.24)', border: '1px solid rgba(255,255,255,0.065)', minWidth: 0, overflow: 'hidden' }}>
+    <div style={{ padding: '12px', minHeight: '76px', background: 'var(--anchor-compact-bg)', border: '1px solid var(--anchor-compact-border)', minWidth: 0, overflow: 'hidden', boxShadow: 'var(--anchor-compact-shadow)' }}>
       <div style={{ color: 'var(--text-dim)', fontSize: '0.62rem', marginBottom: '10px' }}>{label}</div>
       <div style={{ color: tone, fontFamily: 'var(--font-data)', fontWeight: 800, fontSize: 'clamp(1.18rem, 1.55vw, 1.42rem)', fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere', lineHeight: 1 }}>{value}</div>
     </div>
@@ -313,7 +312,7 @@ function AnchorDecisionEngine({ stats }) {
     ? (stats.mab.anchor_count / stats.mab.total_decisions) * 100
     : 0;
   return (
-    <div style={{ ...panelStyle, padding: '20px' }}>
+    <div className="anchor-decisionEngine" style={{ ...panelStyle, padding: '20px' }}>
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: `radial-gradient(circle at 20% 8%, ${LEVEL_COLORS[currentLevel] || accent}16, transparent 34%), radial-gradient(circle at 82% 0%, ${accent}12, transparent 36%)` }} />
       <div style={{ position: 'relative' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '18px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -396,7 +395,7 @@ export default function AnchorPage() {
             minHeight: '40px',
             padding: '8px 16px',
             border: '1px solid var(--border-subtle)',
-            background: 'rgba(255,255,255,0.02)',
+            background: 'var(--anchor-refresh-bg)',
             color: 'var(--text-muted)',
             cursor: 'pointer',
             fontFamily: 'var(--font-heading)',

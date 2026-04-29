@@ -130,7 +130,7 @@ export default function LedgerPage() {
             <span className="dashboard-eyebrow">Fabric / Live Chain View</span>
             <h2 className="dashboard-title" style={{ marginTop: '8px' }}>
               <Blocks size={24} />
-              区块链账本
+              区块链
             </h2>
           </div>
           <div className="ledger-liveBadge">
